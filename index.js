@@ -1,21 +1,6 @@
 // ============================================================================
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
-// v3.7.0（含 API 报错处理 + 上下文上限 + 醒目设置图标）
-//
-// 本轮新增（相对上一版）：
-//   · API 报错解析：429 / 500 / 503 / 401 / 403 / 404 / 413 / CORS / AbortError
-//     等分类成人话原因 + 建议动作 + 是否可重试。
-//   · 报错展示：楼层 chip 错误行 + toastr（绕过 showToast 开关）+ console。
-//   · 可重试错误（429 / 5xx / 408）在错误行下方给「↻ 重试」小按钮。
-//   · 上下文最高字数选项：放进 ⛭ 设置，默认 4000，范围 100~20000。
-//     仅作用于「喂给模型的最新 AI 回复正文」的截取长度。
-//   · ⛭ 设置图标换成 Font Awesome 齿轮 + 圆形浅底，悬停变亮。
-//
-// 沿用：
-//   · ⛭ 设置弹窗（连接 / 选项模板 DIY / 提示词只读展示 / 上下文上限）。
-//   · 楼层 chip = 候选结果的唯一展示位。
-//   · 悬浮球（🧭 圆标）常驻；× 只收起卡片。
-//   · 生成默认手动；自动开关默认关。
+// v3.7.0（含 API 报错处理 + 上下文上限 + 醒目设置图标 + 扩展设置可折叠）
 // ============================================================================
 
 (function () {
@@ -62,10 +47,6 @@
   let lastRequestKey = null;
   let settingsEl = null;
 
-  // -------------------------------------------------------------------------
-  // 基础
-  // -------------------------------------------------------------------------
-
   function getCtx() {
     return (typeof SillyTavern !== 'undefined' && SillyTavern.getContext)
       ? SillyTavern.getContext()
@@ -108,16 +89,11 @@
     }
   }
 
-  // 上下文上限（钳到 [100, 20000]，非数回退 4000）
   function clampNarrativeChars(v) {
     const n = Number(v);
     if (!Number.isFinite(n)) return 4000;
     return Math.max(MIN_NARRATIVE_CHARS, Math.min(MAX_NARRATIVE_CHARS, Math.round(n)));
   }
-
-  // -------------------------------------------------------------------------
-  // 持久去重
-  // -------------------------------------------------------------------------
 
   function readDoneSet() {
     const ctx = getCtx();
@@ -142,10 +118,6 @@
   }
 
   function isDone(key) { return readDoneSet().has(key); }
-
-  // -------------------------------------------------------------------------
-  // unsafe.eval
-  // -------------------------------------------------------------------------
 
   function apiSafeEval(expr, fallback) {
     const api = window.StoryOracleAPI;
@@ -191,13 +163,6 @@
     };
   }
 
-  // -------------------------------------------------------------------------
-  // ⚠ API 报错解析
-  // -------------------------------------------------------------------------
-
-  // 从错误对象里抽 HTTP 状态码。可能藏在：
-  //   · err.status / err.statusCode / err.response.status
-  //   · err.message 里的 "HTTP 429" / "429 Too Many Requests"
   function extractHttpStatus(err) {
     if (!err) return null;
     const cands = [
@@ -218,7 +183,6 @@
     return null;
   }
 
-  // 状态码 → 人话 + 建议 + 是否可重试
   function statusInfo(code) {
     switch (code) {
       case 400: return { title: '请求无效（400）', hint: '参数错误或上下文超长——可缩小「上下文最高字数」，或换一个模型。', retriable: false };
@@ -239,15 +203,12 @@
     }
   }
 
-  // 把任何错误对象/字符串分类成 {kind, title, hint, retriable, raw}
-  //   kind ∈ 'abort' | 'http' | 'cors' | 'network' | 'config' | 'unknown'
   function classifyApiError(err) {
     if (!err) return { kind: 'unknown', title: '未知错误', hint: '', retriable: false, raw: '' };
     if (err.name === 'AbortError') {
       return { kind: 'abort', title: '', hint: '', retriable: false, raw: '' };
     }
     const raw = String((err && err.message) || err || '');
-    // CORS / 网络失败
     if (/Failed to fetch|NetworkError|ERR_NETWORK|ERR_CONNECTION|CORS|Access-Control/i.test(raw)) {
       return {
         kind: 'cors',
@@ -257,20 +218,17 @@
         raw,
       };
     }
-    // HTTP 状态
     const code = extractHttpStatus(err);
     if (code) {
       const info = statusInfo(code);
       return { kind: 'http', title: info.title, hint: info.hint, retriable: info.retriable, raw, status: code };
     }
-    // 我们自己的配置类错误（sendWithOwnConnection 里 throw 的）
     if (/请先|未配置|不可用|缺少/.test(raw)) {
       return { kind: 'config', title: '配置未完成', hint: raw, retriable: false, raw };
     }
     return { kind: 'unknown', title: '未知错误', hint: raw.slice(0, 200), retriable: false, raw };
   }
 
-  // 错误 toastr（绕过 showToast 开关 —— 出错必须让你看见）
   function notifyError(kind, message) {
     try {
       if (!window.toastr) return;
@@ -279,10 +237,6 @@
       }
     } catch (e) { /* ignore */ }
   }
-
-  // -------------------------------------------------------------------------
-  // Prompt
-  // -------------------------------------------------------------------------
 
   const SYSTEM_PROMPT =
     '你是一个为角色扮演游戏生成「玩家下一步可发送指令」候选的助手。' +
@@ -372,10 +326,6 @@
     return parts.join('\n');
   }
 
-  // -------------------------------------------------------------------------
-  // 解析
-  // -------------------------------------------------------------------------
-
   function parseOptions(text) {
     const src = String(text || '');
     const out = [];
@@ -419,10 +369,6 @@
     }
     return dedup.length ? dedup : null;
   }
-
-  // -------------------------------------------------------------------------
-  // 请求发送
-  // -------------------------------------------------------------------------
 
   async function requestNextBeatOptions(narrativeText, beatInfo) {
     const api = window.StoryOracleAPI;
@@ -498,7 +444,6 @@
         signal,
       });
     } catch (netErr) {
-      // 网络层失败（CORS / 断网）——抛原始 err，classifyApiError 会认出
       throw netErr;
     }
     if (!res.ok) {
@@ -509,7 +454,9 @@
       throw e;
     }
     const data = await res.json();
-    return data?.choices?.[0]?.message?.content ?? '';
+    return data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content
+      ? data.choices[0].message.content
+      : '';
   }
 
   async function sendViaSTBackend(url, headers, body, signal) {
@@ -525,10 +472,10 @@
       custom_include_headers: JSON.stringify(headers || {}),
       model, messages, max_tokens,
       stream: false,
-      ...rest,
     };
+    for (const k in rest) payload[k] = rest[k];
     const result = await ctx.ChatCompletionService.processRequest(payload, { presetName: undefined }, true, signal);
-    return result?.content ?? '';
+    return result && result.content ? result.content : '';
   }
 
   function normalizeUrl(u, raw) {
@@ -566,18 +513,19 @@
       throw e;
     }
     const data = await res.json();
-    const list = Array.isArray(data?.data) ? data.data
+    const list = Array.isArray(data && data.data) ? data.data
       : Array.isArray(data) ? data
-      : Array.isArray(data?.models) ? data.models
+      : Array.isArray(data && data.models) ? data.models
       : [];
-    const ids = [...new Set(list.map((m) => (typeof m === 'string' ? m : (m?.id || m?.name))).filter(Boolean))]
-      .sort((a, b) => a.localeCompare(b));
+    const ids = [];
+    const seen = new Set();
+    for (const m of list) {
+      const id = (typeof m === 'string') ? m : (m && (m.id || m.name));
+      if (id && !seen.has(id)) { seen.add(id); ids.push(id); }
+    }
+    ids.sort(function (a, b) { return String(a).localeCompare(String(b)); });
     return ids;
   }
-
-  // -------------------------------------------------------------------------
-  // 输入框
-  // -------------------------------------------------------------------------
 
   function fillInput(text) {
     const el = document.getElementById('send_textarea');
@@ -587,10 +535,6 @@
     try { el.focus(); } catch (e) { /* ignore */ }
     return true;
   }
-
-  // -------------------------------------------------------------------------
-  // 候选列表渲染
-  // -------------------------------------------------------------------------
 
   function labelClass(label) {
     if (label === LBL_USER) return 'so-nb-lbl-user';
@@ -620,27 +564,23 @@
       txt.textContent = o.content;
       row.appendChild(tag);
       row.appendChild(txt);
-      row.addEventListener('click', () => {
-        if (typeof (opts && opts.onPick) === 'function') opts.onPick(o.content);
+      row.addEventListener('click', function () {
+        if (opts && typeof opts.onPick === 'function') opts.onPick(o.content);
       });
       list.appendChild(row);
     }
     return list;
   }
 
-  // -------------------------------------------------------------------------
-  // Chip
-  // -------------------------------------------------------------------------
-
   function chipIdFor(messageId) { return 'so-next-beat-chip-' + messageId; }
   function removeChip(id) { const el = document.getElementById(chipIdFor(id)); if (el) el.remove(); }
-  function removeAllChips() { document.querySelectorAll('.so-next-beat-chip').forEach((el) => el.remove()); }
+  function removeAllChips() { document.querySelectorAll('.so-next-beat-chip').forEach(function (el) { el.remove(); }); }
 
   function renderChipIdle(messageId, beatInfo) {
     const s = loadSettings();
     if (!s.showChip) return;
-    const $mes = document.querySelector('.mes[mesid="' + messageId + '"]');
-    if (!$mes) return;
+    const mesEl = document.querySelector('.mes[mesid="' + messageId + '"]');
+    if (!mesEl) return;
     removeChip(messageId);
 
     const chip = document.createElement('div');
@@ -649,8 +589,8 @@
 
     const label = document.createElement('span');
     label.className = 'so-next-beat-chip-label';
-    label.textContent = beatInfo && beatInfo.goal
-      ? `🧭 下一拍建议 · 第 ${beatInfo.progress} 拍`
+    label.textContent = (beatInfo && beatInfo.goal)
+      ? ('🧭 下一拍建议 · 第 ' + beatInfo.progress + ' 拍')
       : '🧭 下一拍建议';
     chip.appendChild(label);
 
@@ -665,19 +605,19 @@
     btn.type = 'button';
     btn.className = 'so-next-beat-chip-btn';
     btn.textContent = '生成建议';
-    btn.addEventListener('click', (e) => { e.stopPropagation(); triggerGenerateForMessage(messageId); });
+    btn.addEventListener('click', function (e) { e.stopPropagation(); triggerGenerateForMessage(messageId); });
     chip.appendChild(btn);
 
-    const anchor = $mes.querySelector('.mes_text');
+    const anchor = mesEl.querySelector('.mes_text');
     if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(chip, anchor.nextSibling);
-    else $mes.appendChild(chip);
+    else mesEl.appendChild(chip);
   }
 
   function renderChipError(messageId, beatInfo, errInfo, retryCb) {
     const s = loadSettings();
     if (!s.showChip) return;
-    const $mes = document.querySelector('.mes[mesid="' + messageId + '"]');
-    if (!$mes) return;
+    const mesEl = document.querySelector('.mes[mesid="' + messageId + '"]');
+    if (!mesEl) return;
     removeChip(messageId);
 
     const chip = document.createElement('div');
@@ -686,8 +626,8 @@
 
     const label = document.createElement('span');
     label.className = 'so-next-beat-chip-label';
-    label.textContent = beatInfo && beatInfo.goal
-      ? `🧭 下一拍建议 · 第 ${beatInfo.progress} 拍`
+    label.textContent = (beatInfo && beatInfo.goal)
+      ? ('🧭 下一拍建议 · 第 ' + beatInfo.progress + ' 拍')
       : '🧭 下一拍建议';
     chip.appendChild(label);
 
@@ -719,7 +659,7 @@
     retry.type = 'button';
     retry.className = 'so-next-beat-chip-btn';
     retry.textContent = '↻ 重试';
-    retry.addEventListener('click', (e) => {
+    retry.addEventListener('click', function (e) {
       e.stopPropagation();
       if (typeof retryCb === 'function') retryCb();
       else triggerGenerateForMessage(messageId);
@@ -735,16 +675,16 @@
 
     chip.appendChild(foot);
 
-    const anchor = $mes.querySelector('.mes_text');
+    const anchor = mesEl.querySelector('.mes_text');
     if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(chip, anchor.nextSibling);
-    else $mes.appendChild(chip);
+    else mesEl.appendChild(chip);
   }
 
   function renderChipWithOptions(messageId, options, beatInfo) {
     const s = loadSettings();
     if (!s.showChip) return;
-    const $mes = document.querySelector('.mes[mesid="' + messageId + '"]');
-    if (!$mes) return;
+    const mesEl = document.querySelector('.mes[mesid="' + messageId + '"]');
+    if (!mesEl) return;
     removeChip(messageId);
 
     const chip = document.createElement('div');
@@ -753,8 +693,8 @@
 
     const label = document.createElement('span');
     label.className = 'so-next-beat-chip-label';
-    label.textContent = beatInfo && beatInfo.goal
-      ? `🧭 下一拍建议 · 第 ${beatInfo.progress} 拍`
+    label.textContent = (beatInfo && beatInfo.goal)
+      ? ('🧭 下一拍建议 · 第 ' + beatInfo.progress + ' 拍')
       : '🧭 下一拍建议';
     chip.appendChild(label);
 
@@ -765,7 +705,7 @@
       chip.appendChild(g);
     }
 
-    chip.appendChild(buildOptionsList(options, { onPick: (c) => { fillInput(c); } }));
+    chip.appendChild(buildOptionsList(options, { onPick: function (c) { fillInput(c); } }));
 
     const foot = document.createElement('div');
     foot.className = 'so-next-beat-chip-foot';
@@ -774,7 +714,7 @@
     regen.type = 'button';
     regen.className = 'so-next-beat-chip-btn so-next-beat-chip-btn-minor';
     regen.textContent = '重新生成';
-    regen.addEventListener('click', (e) => { e.stopPropagation(); triggerGenerateForMessage(messageId); });
+    regen.addEventListener('click', function (e) { e.stopPropagation(); triggerGenerateForMessage(messageId); });
     foot.appendChild(regen);
 
     const fillAll = document.createElement('button');
@@ -782,18 +722,18 @@
     fillAll.className = 'so-next-beat-chip-btn so-next-beat-chip-btn-minor';
     fillAll.textContent = '填入整段';
     fillAll.title = '把全部候选按行填入输入框';
-    fillAll.addEventListener('click', (e) => {
+    fillAll.addEventListener('click', function (e) {
       e.stopPropagation();
-      const all = options.map((o) => '[' + o.label + '] ' + o.content).join('\n');
+      const all = options.map(function (o) { return '[' + o.label + '] ' + o.content; }).join('\n');
       fillInput(all);
     });
     foot.appendChild(fillAll);
 
     chip.appendChild(foot);
 
-    const anchor = $mes.querySelector('.mes_text');
+    const anchor = mesEl.querySelector('.mes_text');
     if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(chip, anchor.nextSibling);
-    else $mes.appendChild(chip);
+    else mesEl.appendChild(chip);
   }
 
   function rehangChips() {
@@ -810,10 +750,6 @@
     rehangChips();
     updatePanel();
   }
-
-  // -------------------------------------------------------------------------
-  // Toast
-  // -------------------------------------------------------------------------
 
   function ensureToastContainer() {
     let el = document.getElementById('so-next-beat-toast');
@@ -840,7 +776,7 @@
     label.textContent = '🧭 下一拍建议';
     el.appendChild(label);
 
-    el.appendChild(buildOptionsList(options, { onPick: (c) => { fillInput(c); hideSuggestionToast(); } }));
+    el.appendChild(buildOptionsList(options, { onPick: function (c) { fillInput(c); hideSuggestionToast(); } }));
 
     const row = document.createElement('div');
     row.className = 'so-next-beat-row';
@@ -854,26 +790,18 @@
     el.classList.add('so-next-beat-show');
   }
 
-  // -------------------------------------------------------------------------
-  // lastByChat
-  // -------------------------------------------------------------------------
-
   function setLast(entry) {
     const key = chatKey();
     lastByChat[key] = Object.assign({ at: Date.now() }, entry || {});
     const keys = Object.keys(lastByChat);
     if (keys.length > 30) {
-      keys.sort((a, b) => (lastByChat[a].at || 0) - (lastByChat[b].at || 0));
+      keys.sort(function (a, b) { return (lastByChat[a].at || 0) - (lastByChat[b].at || 0); });
       for (let i = 0; i < keys.length - 30; i++) delete lastByChat[keys[i]];
     }
     updatePanel();
   }
 
   function getLast() { return lastByChat[chatKey()] || null; }
-
-  // -------------------------------------------------------------------------
-  // 触发
-  // -------------------------------------------------------------------------
 
   async function generateOptionsForMessage(messageId) {
     const ctx = getCtx();
@@ -887,7 +815,7 @@
 
     const beatInfo = getActiveBeatInfo();
     const options = await requestNextBeatOptions(narrative, beatInfo);
-    return { options, beatInfo, messageId };
+    return { options: options, beatInfo: beatInfo, messageId: messageId };
   }
 
   async function triggerGenerateForMessage(messageId) {
@@ -916,9 +844,8 @@
     const cur = ctx.chat[messageId];
     if (!cur || ((cur.swipe_id || 0) !== (m.swipe_id || 0))) return;
 
-    // 生成成功
     if (out && out.options && out.options.length) {
-      setLast({ options: out.options, beatInfo: out.beatInfo, messageId });
+      setLast({ options: out.options, beatInfo: out.beatInfo, messageId: messageId });
       renderChipWithOptions(messageId, out.options, out.beatInfo);
       showSuggestionToast(out.options);
       notifyFloatNewOptions();
@@ -926,12 +853,9 @@
       return;
     }
 
-    // 失败：分类报错
     const info = classifyApiError(caughtErr || new Error('模型没有返回可解析的候选'));
-    // AbortError：静默返回（用户取消 / 内部顶替）
     if (info.kind === 'abort') return;
 
-    // 无候选但也没抛错（模型返回了空 / 格式错）
     if (!caughtErr) {
       info.title = '模型没有返回可解析的候选';
       info.hint = '模型可能返回了空 / 纯文本 / 不符合格式的内容——可「↻ 重试」，或到 ⛭ 设置里填「选项模板 DIY」明确格式。';
@@ -940,11 +864,9 @@
 
     console.error('[next-beat] 生成失败：', caughtErr || '(空候选)', info);
 
-    // 弹 toastr（绕过 showToast）
     notifyError(info.title || '生成失败', info.hint || '请到浏览器控制台查看详情');
 
-    // chip 里出错误行 + ↻ 重试
-    renderChipError(messageId, getActiveBeatInfo(), info, () => triggerGenerateForMessage(messageId));
+    renderChipError(messageId, getActiveBeatInfo(), info, function () { triggerGenerateForMessage(messageId); });
   }
 
   function showBusyToast() {
@@ -960,10 +882,6 @@
     try { if (h && window.toastr && window.toastr.clear) window.toastr.clear(h); } catch (e) { /* ignore */ }
   }
 
-  // -------------------------------------------------------------------------
-  // 自动触发（默认关）
-  // -------------------------------------------------------------------------
-
   function isAiMessage(ctx, messageId) {
     const m = ctx && ctx.chat && ctx.chat[messageId];
     if (!m || m.is_user || m.is_system) return false;
@@ -977,14 +895,10 @@
     if (!ctx || !isAiMessage(ctx, messageId)) return;
     const m = ctx.chat[messageId];
     const swipeId = m.swipe_id || 0;
-    const key = `${chatKey()}:${messageId}:${swipeId}`;
+    const key = chatKey() + ':' + messageId + ':' + swipeId;
     if (isDone(key)) return;
     await triggerGenerateForMessage(messageId);
   }
-
-  // -------------------------------------------------------------------------
-  // ⛭ 设置弹窗
-  // -------------------------------------------------------------------------
 
   const SETTINGS_POS_KEY = MODULE_ID + '_settings_pos';
 
@@ -998,7 +912,7 @@
     return null;
   }
   function saveSettingsPos(left, top) {
-    try { localStorage.setItem(SETTINGS_POS_KEY, JSON.stringify({ left, top })); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(SETTINGS_POS_KEY, JSON.stringify({ left: left, top: top })); } catch (e) { /* ignore */ }
   }
   function clearSettingsPos() {
     try { localStorage.removeItem(SETTINGS_POS_KEY); } catch (e) { /* ignore */ }
@@ -1030,7 +944,7 @@
       sel.appendChild(opt);
     }
     sel.disabled = false;
-    if (s.connModel && list.includes(s.connModel)) sel.value = s.connModel;
+    if (s.connModel && list.indexOf(s.connModel) >= 0) sel.value = s.connModel;
     else sel.value = '';
   }
 
@@ -1057,97 +971,95 @@
 
     settingsEl = document.createElement('div');
     settingsEl.id = 'so-nb-settings';
-    settingsEl.innerHTML = `
-      <div class="so-nb-set-header" id="so-nb-set-drag-handle" title="按住可拖动">
-        <span>⛭ 设置</span>
-        <span class="so-nb-set-reset" id="so-nb-set-reset" title="重置到默认位置">⌖</span>
-        <span class="so-nb-set-close" id="so-nb-set-close" title="关闭">×</span>
-      </div>
-      <div class="so-nb-set-body">
+    settingsEl.innerHTML =
+      '<div class="so-nb-set-header" id="so-nb-set-drag-handle" title="按住可拖动">' +
+        '<span>⛭ 设置</span>' +
+        '<span class="so-nb-set-reset" id="so-nb-set-reset" title="重置到默认位置">⌖</span>' +
+        '<span class="so-nb-set-close" id="so-nb-set-close" title="关闭">×</span>' +
+      '</div>' +
+      '<div class="so-nb-set-body">' +
 
-        <details class="so-nb-set-group" open>
-          <summary>连接设置（建议专用）</summary>
-          <div class="so-nb-set-group-body">
-            <label class="checkbox_label so-nb-toggle-row">
-              <input type="radio" name="so-nb-set-conn-mode" id="so-nb-set-use-sy" ${!s.useOwnConnection ? 'checked' : ''}>
-              使用故事神谕的连接（默认）
-            </label>
-            <label class="checkbox_label so-nb-toggle-row">
-              <input type="radio" name="so-nb-set-conn-mode" id="so-nb-set-use-own" ${s.useOwnConnection ? 'checked' : ''}>
-              使用我自己的连接
-            </label>
+        '<details class="so-nb-set-group" open>' +
+          '<summary>连接设置（建议专用）</summary>' +
+          '<div class="so-nb-set-group-body">' +
+            '<label class="checkbox_label so-nb-toggle-row">' +
+              '<input type="radio" name="so-nb-set-conn-mode" id="so-nb-set-use-sy" ' + (!s.useOwnConnection ? 'checked' : '') + '>' +
+              '使用故事神谕的连接（默认）' +
+            '</label>' +
+            '<label class="checkbox_label so-nb-toggle-row">' +
+              '<input type="radio" name="so-nb-set-conn-mode" id="so-nb-set-use-own" ' + (s.useOwnConnection ? 'checked' : '') + '>' +
+              '使用我自己的连接' +
+            '</label>' +
+            '<div id="so-nb-set-own" style="display:none;">' +
+              '<label class="so-nb-field">' +
+                '<span>端点 URL</span>' +
+                '<input type="text" id="so-nb-set-endpoint" value="' + escapeAttr(s.connEndpoint) + '" placeholder="https://your-proxy.com/v1">' +
+              '</label>' +
+              '<label class="so-nb-field">' +
+                '<span>API 密钥</span>' +
+                '<input type="password" id="so-nb-set-apikey" value="' + escapeAttr(s.connApiKey) + '" placeholder="sk-...">' +
+              '</label>' +
+              '<div class="so-nb-conn-row">' +
+                '<button type="button" id="so-nb-set-fetch" class="so-next-beat-btn so-next-beat-use">🔍 拉取模型列表</button>' +
+                '<span class="so-nb-conn-status" id="so-nb-set-status"></span>' +
+              '</div>' +
+              '<label class="so-nb-field">' +
+                '<span>模型（从拉取结果中选择）</span>' +
+                '<select id="so-nb-set-model-select"></select>' +
+              '</label>' +
+              '<label class="checkbox_label so-nb-toggle-row">' +
+                '<input type="checkbox" id="so-nb-set-backend" ' + (s.connDirectViaBackend ? 'checked' : '') + '>' +
+                '经酒馆后端转发（避免浏览器跨域 CORS）' +
+              '</label>' +
+              '<label class="checkbox_label so-nb-toggle-row">' +
+                '<input type="checkbox" id="so-nb-set-rawurl" ' + (s.connDirectRawUrl ? 'checked' : '') + '>' +
+                '地址原样使用（不自动补 /v1）' +
+              '</label>' +
+            '</div>' +
+          '</div>' +
+        '</details>' +
 
-            <div id="so-nb-set-own" style="display:none;">
-              <label class="so-nb-field">
-                <span>端点 URL</span>
-                <input type="text" id="so-nb-set-endpoint" value="${escapeAttr(s.connEndpoint)}" placeholder="https://your-proxy.com/v1">
-              </label>
-              <label class="so-nb-field">
-                <span>API 密钥</span>
-                <input type="password" id="so-nb-set-apikey" value="${escapeAttr(s.connApiKey)}" placeholder="sk-...">
-              </label>
-              <div class="so-nb-conn-row">
-                <button type="button" id="so-nb-set-fetch" class="so-next-beat-btn so-next-beat-use">🔍 拉取模型列表</button>
-                <span class="so-nb-conn-status" id="so-nb-set-status"></span>
-              </div>
-              <label class="so-nb-field">
-                <span>模型（从拉取结果中选择）</span>
-                <select id="so-nb-set-model-select"></select>
-              </label>
-              <label class="checkbox_label so-nb-toggle-row">
-                <input type="checkbox" id="so-nb-set-backend" ${s.connDirectViaBackend ? 'checked' : ''}>
-                经酒馆后端转发（避免浏览器跨域 CORS）
-              </label>
-              <label class="checkbox_label so-nb-toggle-row">
-                <input type="checkbox" id="so-nb-set-rawurl" ${s.connDirectRawUrl ? 'checked' : ''}>
-                地址原样使用（不自动补 /v1）
-              </label>
-            </div>
-          </div>
-        </details>
+        '<details class="so-nb-set-group">' +
+          '<summary>生成设置</summary>' +
+          '<div class="so-nb-set-group-body">' +
+            '<label class="so-nb-field">' +
+              '<span>上下文最高字数（喂给模型的最新正文最多截取多少字；越大越准但越贵）</span>' +
+              '<input type="number" id="so-nb-set-maxchars" value="' + clampNarrativeChars(s.maxNarrativeChars) + '" min="' + MIN_NARRATIVE_CHARS + '" max="' + MAX_NARRATIVE_CHARS + '" step="100">' +
+            '</label>' +
+            '<p class="so-nb-panel-label-hint" style="margin-left:0;">' +
+              '范围 ' + MIN_NARRATIVE_CHARS + '~' + MAX_NARRATIVE_CHARS + ' 字；默认 4000。<br>' +
+              '只作用于「最新一条 AI 回复的正文」；拍目标、模板等不占这个上限。' +
+            '</p>' +
+          '</div>' +
+        '</details>' +
 
-        <details class="so-nb-set-group">
-          <summary>生成设置</summary>
-          <div class="so-nb-set-group-body">
-            <label class="so-nb-field">
-              <span>上下文最高字数（喂给模型的最新正文最多截取多少字；越大越准但越贵）</span>
-              <input type="number" id="so-nb-set-maxchars" value="${clampNarrativeChars(s.maxNarrativeChars)}" min="${MIN_NARRATIVE_CHARS}" max="${MAX_NARRATIVE_CHARS}" step="100">
-            </label>
-            <p class="so-nb-panel-label-hint" style="margin-left:0;">
-              范围 ${MIN_NARRATIVE_CHARS}~${MAX_NARRATIVE_CHARS} 字；默认 4000。<br>
-              只作用于「最新一条 AI 回复的正文」；拍目标、模板等不占这个上限。
-            </p>
-          </div>
-        </details>
+        '<details class="so-nb-set-group">' +
+          '<summary>选项模板 DIY（可选）</summary>' +
+          '<div class="so-nb-set-group-body">' +
+            '<p class="so-nb-panel-label-hint" style="margin-left:0;">' +
+              '留空 = 使用插件内置的「**标签** 内容」格式。<br>' +
+              '填写后会把你的模板作为额外要求发给模型，让模型按模板产出选项。<br>' +
+              '你可以自定义选项数量、每条选项的主导方向、格式与结构。' +
+            '</p>' +
+            '<textarea id="so-nb-set-tpl" rows="10" placeholder="例如：&#10;&lt;branches&gt;&#10;&lt;details&gt;&#10;  &lt;summary&gt;🍬外向思维&lt;/summary&gt;&#10;&#10;A.xxx（以Ne功能为主导的选项）&#10;B.xxx（以Fe功能为主导的选项）&#10;C.xxx（以Se功能为主导的选项）&#10;D.xxx（以Te功能为主导的选项）&#10;&lt;/details&gt;&#10;&lt;/branches&gt;">' + escapeText(s.customOptionTemplate) + '</textarea>' +
+            '<p class="so-nb-panel-label-hint" style="margin-left:0;">' +
+              'ℹ 衔接上下文（本拍目标 + 最近正文）与「所有候选最终要推向本拍目标」的根本要求锁定，不因模板而改变。' +
+            '</p>' +
+          '</div>' +
+        '</details>' +
 
-        <details class="so-nb-set-group">
-          <summary>选项模板 DIY（可选）</summary>
-          <div class="so-nb-set-group-body">
-            <p class="so-nb-panel-label-hint" style="margin-left:0;">
-              留空 = 使用插件内置的「**标签** 内容」格式。<br>
-              填写后会把你的模板作为额外要求发给模型，让模型按模板产出选项。<br>
-              你可以自定义选项数量、每条选项的主导方向、格式与结构。
-            </p>
-            <textarea id="so-nb-set-tpl" rows="10" placeholder="例如：&#10;<branches>&#10;<details>&#10;  <summary>🍬外向思维</summary>&#10;&#10;A.xxx（以Ne功能为主导的选项）&#10;B.xxx（以Fe功能为主导的选项）&#10;C.xxx（以Se功能为主导的选项）&#10;D.xxx（以Te功能为主导的选项）&#10;</details>&#10;</branches>">${escapeText(s.customOptionTemplate)}</textarea>
-            <p class="so-nb-panel-label-hint" style="margin-left:0;">
-              ℹ 衔接上下文（本拍目标 + 最近正文）与「所有候选最终要推向本拍目标」的根本要求锁定，不因模板而改变。
-            </p>
-          </div>
-        </details>
+        '<details class="so-nb-set-group">' +
+          '<summary>提示词（只读展示）</summary>' +
+          '<div class="so-nb-set-group-body">' +
+            '<p class="so-nb-panel-label-hint" style="margin-left:0;">' +
+              '这是插件内置的系统提示词。衔接上下文的部分由系统自动处理，不可修改；<br>' +
+              '如需自定义选项的数量 / 主导方向 / 格式，请使用上面的「选项模板 DIY」。' +
+            '</p>' +
+            '<textarea id="so-nb-set-sysprompt" rows="12" readonly></textarea>' +
+          '</div>' +
+        '</details>' +
 
-        <details class="so-nb-set-group">
-          <summary>提示词（只读展示）</summary>
-          <div class="so-nb-set-group-body">
-            <p class="so-nb-panel-label-hint" style="margin-left:0;">
-              这是插件内置的系统提示词。衔接上下文的部分由系统自动处理，不可修改；<br>
-              如需自定义选项的数量 / 主导方向 / 格式，请使用上面的「选项模板 DIY」。
-            </p>
-            <textarea id="so-nb-set-sysprompt" rows="12" readonly></textarea>
-          </div>
-        </details>
-
-      </div>
-    `;
+      '</div>';
     document.body.appendChild(settingsEl);
 
     (function applyStoredPos() {
@@ -1158,7 +1070,7 @@
       settingsEl.style.transform = 'none';
     })();
 
-    settingsEl.querySelector('#so-nb-set-reset').addEventListener('click', (e) => {
+    settingsEl.querySelector('#so-nb-set-reset').addEventListener('click', function (e) {
       e.stopPropagation();
       clearSettingsPos();
       settingsEl.style.left = '';
@@ -1170,7 +1082,7 @@
     (function wireDrag() {
       const handle = settingsEl.querySelector('#so-nb-set-drag-handle');
       let sx = 0, sy = 0, sl = 0, st = 0, pid = null, moved = false;
-      handle.addEventListener('pointerdown', (e) => {
+      handle.addEventListener('pointerdown', function (e) {
         if (e.target.closest('.so-nb-set-close') || e.target.closest('.so-nb-set-reset')) return;
         if (e.button != null && e.button > 0) return;
         pid = e.pointerId;
@@ -1183,7 +1095,7 @@
         settingsEl.classList.add('so-nb-set-dragging');
         try { handle.setPointerCapture(pid); } catch (_) { /* ignore */ }
       });
-      handle.addEventListener('pointermove', (e) => {
+      handle.addEventListener('pointermove', function (e) {
         if (e.pointerId !== pid) return;
         const dx = e.clientX - sx, dy = e.clientY - sy;
         if (!moved && Math.hypot(dx, dy) < 4) return;
@@ -1195,7 +1107,7 @@
         settingsEl.style.left = nx + 'px';
         settingsEl.style.top = ny + 'px';
       });
-      const end = (e) => {
+      function end(e) {
         if (pid == null || (e && e.pointerId !== pid)) return;
         try { handle.releasePointerCapture(pid); } catch (_) { /* ignore */ }
         pid = null;
@@ -1204,7 +1116,7 @@
           const r = settingsEl.getBoundingClientRect();
           saveSettingsPos(Math.round(r.left), Math.round(r.top));
         }
-      };
+      }
       handle.addEventListener('pointerup', end);
       handle.addEventListener('pointercancel', end);
     })();
@@ -1224,19 +1136,18 @@
       applySettingsConnVisibility();
     });
 
-    const bindInput = (id, key) => {
+    function bindInput(id, key) {
       const el = settingsEl.querySelector(id);
       el.addEventListener('input', function () {
         const st = loadSettings();
         st[key] = this.value;
         saveSettings();
       });
-    };
+    }
     bindInput('#so-nb-set-endpoint', 'connEndpoint');
     bindInput('#so-nb-set-apikey', 'connApiKey');
     bindInput('#so-nb-set-tpl', 'customOptionTemplate');
 
-    // 上下文上限：input 变化存原始值；blur / change 时钳到范围
     const maxCharsEl = settingsEl.querySelector('#so-nb-set-maxchars');
     maxCharsEl.addEventListener('input', function () {
       const st = loadSettings();
@@ -1251,18 +1162,18 @@
       saveSettings();
     });
 
-    const bindToggle = (id, key) => {
+    function bindToggle(id, key) {
       const el = settingsEl.querySelector(id);
       el.addEventListener('change', function () {
         const st = loadSettings();
         st[key] = this.checked;
         saveSettings();
       });
-    };
+    }
     bindToggle('#so-nb-set-backend', 'connDirectViaBackend');
     bindToggle('#so-nb-set-rawurl', 'connDirectRawUrl');
 
-    settingsEl.querySelector('#so-nb-set-fetch').addEventListener('click', async () => {
+    settingsEl.querySelector('#so-nb-set-fetch').addEventListener('click', async function () {
       const btn = settingsEl.querySelector('#so-nb-set-fetch');
       const status = settingsEl.querySelector('#so-nb-set-status');
       const old = btn.textContent;
@@ -1279,10 +1190,10 @@
         }
         const st = loadSettings();
         st.connModelList = list;
-        if (!list.includes(st.connModel)) st.connModel = '';
+        if (list.indexOf(st.connModel) < 0) st.connModel = '';
         saveSettings();
         renderSettingsModelSelect();
-        status.textContent = `✓ 拉取到 ${list.length} 个模型`;
+        status.textContent = '✓ 拉取到 ' + list.length + ' 个模型';
       } catch (err) {
         const info = classifyApiError(err);
         status.textContent = '拉取失败：' + (info.title || err.message || err) + (info.hint ? '——' + info.hint : '');
@@ -1305,10 +1216,6 @@
     return settingsEl;
   }
 
-  // -------------------------------------------------------------------------
-  // 中心面板
-  // -------------------------------------------------------------------------
-
   const PANEL_POS_KEY = MODULE_ID + '_panel_pos';
 
   function loadPanelPos() {
@@ -1321,7 +1228,7 @@
     return null;
   }
   function savePanelPos(left, top) {
-    try { localStorage.setItem(PANEL_POS_KEY, JSON.stringify({ left, top })); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(PANEL_POS_KEY, JSON.stringify({ left: left, top: top })); } catch (e) { /* ignore */ }
   }
   function clearPanelPos() {
     try { localStorage.removeItem(PANEL_POS_KEY); } catch (e) { /* ignore */ }
@@ -1333,41 +1240,39 @@
 
     panelEl = document.createElement('div');
     panelEl.id = 'so-next-beat-panel';
-    panelEl.innerHTML = `
-      <div class="so-nb-panel-header" id="so-nb-panel-drag-handle" title="按住可拖动此窗口">
-        <span>🧭 下一拍建议</span>
-        <span class="so-nb-panel-gear" id="so-nb-panel-gear" title="设置"><i class="fa-solid fa-gear"></i></span>
-        <span class="so-nb-panel-reset" id="so-nb-panel-reset" title="重置到默认位置">⌖</span>
-        <span class="so-nb-panel-close" title="关闭">×</span>
-      </div>
-      <div class="so-nb-panel-body">
-        <label class="checkbox_label so-nb-toggle-row">
-          <input type="checkbox" id="so-nb-panel-enabled" ${s.enabled ? 'checked' : ''}>
-          每条新回复自动生成（默认关；手动点更省 API）
-        </label>
-        <label class="checkbox_label so-nb-toggle-row">
-          <input type="checkbox" id="so-nb-panel-chip" ${s.showChip ? 'checked' : ''}>
-          在回复下方显示（结果展示位）
-        </label>
-        <label class="checkbox_label so-nb-toggle-row">
-          <input type="checkbox" id="so-nb-panel-toast" ${s.showToast ? 'checked' : ''}>
-          额外用右下角浮窗提示
-        </label>
-        <label class="checkbox_label so-nb-toggle-row">
-          <input type="checkbox" id="so-nb-panel-float" ${s.showFloat ? 'checked' : ''}>
-          悬浮窗常驻（折叠成 🧭 圆标）
-        </label>
-        <p class="so-nb-panel-label-hint">连接 / 模板 / 提示词 / 上下文上限都在 ⛭ 设置里。</p>
-
-        <div class="so-nb-panel-label">当前拍：</div>
-        <div class="so-nb-panel-beat" id="so-nb-panel-beat">（未在引导序列中）</div>
-        <div class="so-nb-panel-label">最近一次生成：</div>
-        <div class="so-nb-panel-suggestion" id="so-nb-panel-suggestion">（暂无 —— 点下方按钮生成）</div>
-        <div class="so-nb-panel-row">
-          <button type="button" id="so-nb-panel-regen" class="so-next-beat-btn so-next-beat-use">针对最新回复生成</button>
-        </div>
-      </div>
-    `;
+    panelEl.innerHTML =
+      '<div class="so-nb-panel-header" id="so-nb-panel-drag-handle" title="按住可拖动此窗口">' +
+        '<span>🧭 下一拍建议</span>' +
+        '<span class="so-nb-panel-gear" id="so-nb-panel-gear" title="设置"><i class="fa-solid fa-gear"></i></span>' +
+        '<span class="so-nb-panel-reset" id="so-nb-panel-reset" title="重置到默认位置">⌖</span>' +
+        '<span class="so-nb-panel-close" title="关闭">×</span>' +
+      '</div>' +
+      '<div class="so-nb-panel-body">' +
+        '<label class="checkbox_label so-nb-toggle-row">' +
+          '<input type="checkbox" id="so-nb-panel-enabled" ' + (s.enabled ? 'checked' : '') + '>' +
+          '每条新回复自动生成（默认关；手动点更省 API）' +
+        '</label>' +
+        '<label class="checkbox_label so-nb-toggle-row">' +
+          '<input type="checkbox" id="so-nb-panel-chip" ' + (s.showChip ? 'checked' : '') + '>' +
+          '在回复下方显示（结果展示位）' +
+        '</label>' +
+        '<label class="checkbox_label so-nb-toggle-row">' +
+          '<input type="checkbox" id="so-nb-panel-toast" ' + (s.showToast ? 'checked' : '') + '>' +
+          '额外用右下角浮窗提示' +
+        '</label>' +
+        '<label class="checkbox_label so-nb-toggle-row">' +
+          '<input type="checkbox" id="so-nb-panel-float" ' + (s.showFloat ? 'checked' : '') + '>' +
+          '悬浮窗常驻（折叠成 🧭 圆标）' +
+        '</label>' +
+        '<p class="so-nb-panel-label-hint">连接 / 模板 / 提示词 / 上下文上限都在 ⛭ 设置里。</p>' +
+        '<div class="so-nb-panel-label">当前拍：</div>' +
+        '<div class="so-nb-panel-beat" id="so-nb-panel-beat">（未在引导序列中）</div>' +
+        '<div class="so-nb-panel-label">最近一次生成：</div>' +
+        '<div class="so-nb-panel-suggestion" id="so-nb-panel-suggestion">（暂无 —— 点下方按钮生成）</div>' +
+        '<div class="so-nb-panel-row">' +
+          '<button type="button" id="so-nb-panel-regen" class="so-next-beat-btn so-next-beat-use">针对最新回复生成</button>' +
+        '</div>' +
+      '</div>';
     document.body.appendChild(panelEl);
 
     (function applyStoredPos() {
@@ -1378,7 +1283,7 @@
       panelEl.style.transform = 'scale(0.96)';
     })();
 
-    panelEl.querySelector('#so-nb-panel-reset').addEventListener('click', (e) => {
+    panelEl.querySelector('#so-nb-panel-reset').addEventListener('click', function (e) {
       e.stopPropagation();
       clearPanelPos();
       panelEl.style.left = '';
@@ -1386,7 +1291,7 @@
       panelEl.style.transform = '';
     });
 
-    panelEl.querySelector('#so-nb-panel-gear').addEventListener('click', (e) => {
+    panelEl.querySelector('#so-nb-panel-gear').addEventListener('click', function (e) {
       e.stopPropagation();
       openSettings();
     });
@@ -1394,7 +1299,7 @@
     (function wireDrag() {
       const handle = panelEl.querySelector('#so-nb-panel-drag-handle');
       let sx = 0, sy = 0, sl = 0, st = 0, pid = null, moved = false;
-      handle.addEventListener('pointerdown', (e) => {
+      handle.addEventListener('pointerdown', function (e) {
         if (e.target.closest('.so-nb-panel-close') || e.target.closest('.so-nb-panel-reset') || e.target.closest('.so-nb-panel-gear')) return;
         if (e.button != null && e.button > 0) return;
         pid = e.pointerId;
@@ -1407,7 +1312,7 @@
         panelEl.classList.add('so-nb-dragging');
         try { handle.setPointerCapture(pid); } catch (_) { /* ignore */ }
       });
-      handle.addEventListener('pointermove', (e) => {
+      handle.addEventListener('pointermove', function (e) {
         if (e.pointerId !== pid) return;
         const dx = e.clientX - sx, dy = e.clientY - sy;
         if (!moved && Math.hypot(dx, dy) < 4) return;
@@ -1419,7 +1324,7 @@
         panelEl.style.left = nx + 'px';
         panelEl.style.top = ny + 'px';
       });
-      const end = (e) => {
+      function end(e) {
         if (pid == null || (e && e.pointerId !== pid)) return;
         try { handle.releasePointerCapture(pid); } catch (_) { /* ignore */ }
         pid = null;
@@ -1428,14 +1333,14 @@
           const r = panelEl.getBoundingClientRect();
           savePanelPos(Math.round(r.left), Math.round(r.top));
         }
-      };
+      }
       handle.addEventListener('pointerup', end);
       handle.addEventListener('pointercancel', end);
     })();
 
-    panelEl.querySelector('.so-nb-panel-close').addEventListener('click', () => togglePanel(false));
+    panelEl.querySelector('.so-nb-panel-close').addEventListener('click', function () { togglePanel(false); });
 
-    const bindToggle = (id, key) => {
+    function bindToggle(id, key) {
       const el = panelEl.querySelector(id);
       el.addEventListener('change', function () {
         const st = loadSettings();
@@ -1445,13 +1350,13 @@
         if (key === 'showChip') refreshChips();
         if (key === 'showFloat') applyFloatVisibility();
       });
-    };
+    }
     bindToggle('#so-nb-panel-enabled', 'enabled');
     bindToggle('#so-nb-panel-chip', 'showChip');
     bindToggle('#so-nb-panel-toast', 'showToast');
     bindToggle('#so-nb-panel-float', 'showFloat');
 
-    panelEl.querySelector('#so-nb-panel-regen').addEventListener('click', async () => {
+    panelEl.querySelector('#so-nb-panel-regen').addEventListener('click', async function () {
       const ctx = getCtx();
       if (!ctx || !ctx.chat || !ctx.chat.length) return;
       let idx = -1;
@@ -1476,7 +1381,7 @@
       host.textContent = '（暂无 —— 点下方按钮生成）';
       return;
     }
-    host.textContent = `✓ 已生成 ${options.length} 条候选 —— 请到对应楼层下方查看 / 点选`;
+    host.textContent = '✓ 已生成 ' + options.length + ' 条候选 —— 请到对应楼层下方查看 / 点选';
   }
 
   function setPanelBeat(text) {
@@ -1491,12 +1396,12 @@
     if (entry && Array.isArray(entry.options) && entry.options.length) {
       setPanelSuggestion(entry.options);
       const b = entry.beatInfo;
-      if (b && b.goal) setPanelBeat(`第 ${b.progress} 拍${b.beatTitle ? ' · ' + b.beatTitle : ''}\n目标：${b.goal}`);
+      if (b && b.goal) setPanelBeat('第 ' + b.progress + ' 拍' + (b.beatTitle ? ' · ' + b.beatTitle : '') + '\n目标：' + b.goal);
       else setPanelBeat('（未在引导序列中）');
     } else {
       setPanelSuggestion(null);
       const b = getActiveBeatInfo();
-      if (b && b.goal) setPanelBeat(`第 ${b.progress} 拍${b.beatTitle ? ' · ' + b.beatTitle : ''}\n目标：${b.goal}`);
+      if (b && b.goal) setPanelBeat('第 ' + b.progress + ' 拍' + (b.beatTitle ? ' · ' + b.beatTitle : '') + '\n目标：' + b.goal);
       else setPanelBeat('（未在引导序列中）');
     }
   }
@@ -1507,10 +1412,6 @@
     el.classList.toggle('so-nb-panel-show', show);
     if (show) updatePanel();
   }
-
-  // -------------------------------------------------------------------------
-  // 悬浮球
-  // -------------------------------------------------------------------------
 
   const FLOAT_ID = 'so-nb-float';
   const FLOAT_POS_KEY = MODULE_ID + '_float_pos';
@@ -1525,7 +1426,7 @@
     return null;
   }
   function saveFloatPos(left, top) {
-    try { localStorage.setItem(FLOAT_POS_KEY, JSON.stringify({ left, top })); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(FLOAT_POS_KEY, JSON.stringify({ left: left, top: top })); } catch (e) { /* ignore */ }
   }
 
   function ensureFloat() {
@@ -1534,20 +1435,19 @@
     floatEl = document.createElement('div');
     floatEl.id = FLOAT_ID;
     floatEl.className = 'so-nb-float-hidden so-nb-float-collapsed';
-    floatEl.innerHTML = `
-      <div class="so-nb-float-badge" title="🧭 下一拍建议（点开 / 折叠）">🧭</div>
-      <div class="so-nb-float-body">
-        <div class="so-nb-float-head" id="so-nb-float-drag-handle">
-          <span class="so-nb-float-title">🧭 下一拍建议</span>
-          <span class="so-nb-float-icon-btn" id="so-nb-float-close" title="收起卡片（圆标会保留）">×</span>
-        </div>
-        <div class="so-nb-float-content" id="so-nb-float-content">（点击下方按钮生成候选）</div>
-        <div class="so-nb-float-actions">
-          <button type="button" class="so-next-beat-btn so-next-beat-use" id="so-nb-float-regen">生成 / 重新生成</button>
-          <button type="button" class="so-next-beat-btn" id="so-nb-float-jump">跳到最新候选</button>
-        </div>
-      </div>
-    `;
+    floatEl.innerHTML =
+      '<div class="so-nb-float-badge" title="🧭 下一拍建议（点开 / 折叠）">🧭</div>' +
+      '<div class="so-nb-float-body">' +
+        '<div class="so-nb-float-head" id="so-nb-float-drag-handle">' +
+          '<span class="so-nb-float-title">🧭 下一拍建议</span>' +
+          '<span class="so-nb-float-icon-btn" id="so-nb-float-close" title="收起卡片（圆标会保留）">×</span>' +
+        '</div>' +
+        '<div class="so-nb-float-content" id="so-nb-float-content">（点击下方按钮生成候选）</div>' +
+        '<div class="so-nb-float-actions">' +
+          '<button type="button" class="so-next-beat-btn so-next-beat-use" id="so-nb-float-regen">生成 / 重新生成</button>' +
+          '<button type="button" class="so-next-beat-btn" id="so-nb-float-jump">跳到最新候选</button>' +
+        '</div>' +
+      '</div>';
     document.body.appendChild(floatEl);
 
     const p = loadFloatPos();
@@ -1557,12 +1457,12 @@
       floatEl.style.right = 'auto';
     }
 
-    floatEl.querySelector('.so-nb-float-badge').addEventListener('click', () => {
+    floatEl.querySelector('.so-nb-float-badge').addEventListener('click', function () {
       setFloatCollapsed(!floatCollapsed);
     });
-    floatEl.querySelector('#so-nb-float-close').addEventListener('click', () => setFloatCollapsed(true));
+    floatEl.querySelector('#so-nb-float-close').addEventListener('click', function () { setFloatCollapsed(true); });
 
-    floatEl.querySelector('#so-nb-float-regen').addEventListener('click', async () => {
+    floatEl.querySelector('#so-nb-float-regen').addEventListener('click', async function () {
       const ctx = getCtx();
       if (!ctx || !ctx.chat || !ctx.chat.length) { setFloatContent('（找不到聊天）'); return; }
       let idx = -1;
@@ -1575,7 +1475,7 @@
       await triggerGenerateForMessage(idx);
     });
 
-    floatEl.querySelector('#so-nb-float-jump').addEventListener('click', () => {
+    floatEl.querySelector('#so-nb-float-jump').addEventListener('click', function () {
       jumpToLatestChip();
     });
 
@@ -1593,15 +1493,15 @@
     try { last.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
     catch (e) { try { last.scrollIntoView(); } catch (_) { /* ignore */ } }
     last.classList.add('so-nb-flash');
-    setTimeout(() => last.classList.remove('so-nb-flash'), 1200);
+    setTimeout(function () { last.classList.remove('so-nb-flash'); }, 1200);
   }
 
   function wireFloatDrag() {
     const badge = floatEl.querySelector('.so-nb-float-badge');
     const handle = floatEl.querySelector('#so-nb-float-drag-handle');
-    const makeDrag = (el) => {
+    function makeDrag(el) {
       let sx = 0, sy = 0, sl = 0, st = 0, pid = null, moved = false;
-      el.addEventListener('pointerdown', (e) => {
+      el.addEventListener('pointerdown', function (e) {
         if (e.target.closest('.so-nb-float-icon-btn')) return;
         if (e.button != null && e.button > 0) return;
         pid = e.pointerId;
@@ -1613,7 +1513,7 @@
         floatEl.style.right = 'auto';
         try { el.setPointerCapture(pid); } catch (_) { /* ignore */ }
       });
-      el.addEventListener('pointermove', (e) => {
+      el.addEventListener('pointermove', function (e) {
         if (e.pointerId !== pid) return;
         const dx = e.clientX - sx, dy = e.clientY - sy;
         if (!moved && Math.hypot(dx, dy) < 4) return;
@@ -1625,21 +1525,21 @@
         floatEl.style.left = nx + 'px';
         floatEl.style.top = ny + 'px';
       });
-      const end = (e) => {
+      function end(e) {
         if (pid == null || (e && e.pointerId !== pid)) return;
         try { el.releasePointerCapture(pid); } catch (_) { /* ignore */ }
         pid = null;
         if (moved) {
           const r = floatEl.getBoundingClientRect();
           saveFloatPos(Math.round(r.left), Math.round(r.top));
-          const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+          function swallow(ev) { ev.stopPropagation(); ev.preventDefault(); }
           floatEl.addEventListener('click', swallow, { capture: true, once: true });
-          setTimeout(() => floatEl.removeEventListener('click', swallow, { capture: true }), 300);
+          setTimeout(function () { floatEl.removeEventListener('click', swallow, { capture: true }); }, 300);
         }
-      };
+      }
       el.addEventListener('pointerup', end);
       el.addEventListener('pointercancel', end);
-    };
+    }
     makeDrag(badge);
     makeDrag(handle);
   }
@@ -1676,7 +1576,7 @@
   function updateFloatStatus() {
     const entry = getLast();
     if (entry && Array.isArray(entry.options) && entry.options.length) {
-      setFloatContent(`✓ 已生成 ${entry.options.length} 条候选（在楼层下方）`);
+      setFloatContent('✓ 已生成 ' + entry.options.length + ' 条候选（在楼层下方）');
     } else {
       setFloatContent('（点击下方按钮生成候选）');
     }
@@ -1693,10 +1593,6 @@
     el.classList.add('so-nb-float-fresh');
   }
 
-  // -------------------------------------------------------------------------
-  // 事件绑定
-  // -------------------------------------------------------------------------
-
   function bindEvents() {
     const ctx = getCtx();
     if (!ctx || !ctx.eventSource || !ctx.event_types) {
@@ -1704,26 +1600,22 @@
       return;
     }
     const et = ctx.event_types;
-    const on = (ev, fn) => { try { ctx.eventSource.on(ev, fn); } catch (e) { /* ignore */ } };
+    function on(ev, fn) { try { ctx.eventSource.on(ev, fn); } catch (e) { /* ignore */ } }
 
-    on(et.CHARACTER_MESSAGE_RENDERED, (id) => {
-      Promise.resolve(onMessageRendered(id)).catch((e) => console.warn('[next-beat] 处理失败：', e));
+    on(et.CHARACTER_MESSAGE_RENDERED, function (id) {
+      Promise.resolve(onMessageRendered(id)).catch(function (e) { console.warn('[next-beat] 处理失败：', e); });
       setTimeout(refreshChips, 50);
     });
-    ['MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED'].forEach((name) => {
-      if (et[name]) on(et[name], () => setTimeout(refreshChips, 30));
+    ['MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED'].forEach(function (name) {
+      if (et[name]) on(et[name], function () { setTimeout(refreshChips, 30); });
     });
-    if (et.CHAT_CHANGED) on(et.CHAT_CHANGED, () => {
+    if (et.CHAT_CHANGED) on(et.CHAT_CHANGED, function () {
       removeAllChips();
       setTimeout(rehangChips, 100);
       updatePanel();
       applyFloatVisibility();
     });
   }
-
-  // -------------------------------------------------------------------------
-  // 魔杖菜单
-  // -------------------------------------------------------------------------
 
   const WAND_ID = 'so-next-beat-wand-button';
 
@@ -1739,7 +1631,7 @@
     item.className = 'list-group-item flex-container flexGap5 interactable';
     item.tabIndex = 0;
     item.innerHTML = '<i class="fa-solid fa-compass"></i><span>下一拍建议</span>';
-    item.addEventListener('click', () => {
+    item.addEventListener('click', function () {
       const st = loadSettings();
       if (!st.showFloat) { st.showFloat = true; saveSettings(); syncSettingsUI(); applyFloatVisibility(); }
       togglePanel(true);
@@ -1750,24 +1642,20 @@
 
   function watchWandMenu() {
     if (!injectWandButton()) {
-      const mo = new MutationObserver(() => { if (injectWandButton()) mo.disconnect(); });
+      const mo = new MutationObserver(function () { if (injectWandButton()) mo.disconnect(); });
       mo.observe(document.body, { childList: true, subtree: true });
       return;
     }
     const menu = document.getElementById('extensionsMenu');
     if (menu) {
-      const mo = new MutationObserver(() => { injectWandButton(); });
+      const mo = new MutationObserver(function () { injectWandButton(); });
       mo.observe(menu, { childList: true, subtree: true });
     }
   }
 
-  // -------------------------------------------------------------------------
-  // 扩展设置面板
-  // -------------------------------------------------------------------------
-
   function syncSettingsUI() {
     const s = loadSettings();
-    const set = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+    function set(id, v) { const el = document.getElementById(id); if (el) el.checked = !!v; }
     set('so_next_beat_enabled', s.enabled);
     set('so_next_beat_chip', s.showChip);
     set('so_next_beat_toast', s.showToast);
@@ -1787,33 +1675,47 @@
 
     const div = document.createElement('div');
     div.id = 'so-next-beat-settings';
-    div.className = 'so-next-beat-settings';
-    div.innerHTML = `
-      <h4>🧭 下一拍建议（配套故事神谕，独立扩展 v${VERSION}）</h4>
-      <label class="checkbox_label">
-        <input id="so_next_beat_enabled" type="checkbox">
-        每条新回复自动生成（默认关；手动点更省 API）
-      </label>
-      <label class="checkbox_label">
-        <input id="so_next_beat_chip" type="checkbox">
-        在对应回复下方显示建议（结果展示位）
-      </label>
-      <label class="checkbox_label">
-        <input id="so_next_beat_toast" type="checkbox">
-        额外用右下角浮窗提示
-      </label>
-      <label class="checkbox_label">
-        <input id="so_next_beat_float" type="checkbox">
-        悬浮窗常驻（折叠成 🧭 圆标）
-      </label>
-      <p style="opacity:0.7; font-size:0.85em;">
-        连接 / 模板 / 提示词 / 上下文上限都在 🧭 面板里的 ⛭ 设置中。
-      </p>
-    `;
+    div.className = 'so-next-beat-settings inline-drawer';
+    div.innerHTML =
+      '<div class="inline-drawer-toggle inline-drawer-header">' +
+        '<b>🧭 下一拍建议（配套故事神谕，独立扩展 v' + VERSION + '）</b>' +
+        '<div class="inline-drawer-icon fa-solid fa-circle-chevron-down ui-widget-content"></div>' +
+      '</div>' +
+      '<div class="inline-drawer-content" style="display:none;">' +
+        '<label class="checkbox_label">' +
+          '<input id="so_next_beat_enabled" type="checkbox">' +
+          '每条新回复自动生成（默认关；手动点更省 API）' +
+        '</label>' +
+        '<label class="checkbox_label">' +
+          '<input id="so_next_beat_chip" type="checkbox">' +
+          '在对应回复下方显示建议（结果展示位）' +
+        '</label>' +
+        '<label class="checkbox_label">' +
+          '<input id="so_next_beat_toast" type="checkbox">' +
+          '额外用右下角浮窗提示' +
+        '</label>' +
+        '<label class="checkbox_label">' +
+          '<input id="so_next_beat_float" type="checkbox">' +
+          '悬浮窗常驻（折叠成 🧭 圆标）' +
+        '</label>' +
+        '<p style="opacity:0.7; font-size:0.85em;">' +
+          '连接 / 模板 / 提示词 / 上下文上限都在 🧭 面板里的 ⛭ 设置中。' +
+        '</p>' +
+      '</div>';
     container.appendChild(div);
     syncSettingsUI();
 
-    const bindToggle = (id, key) => {
+    const toggle = div.querySelector('.inline-drawer-toggle');
+    const content = div.querySelector('.inline-drawer-content');
+    if (toggle && content) {
+      toggle.addEventListener('click', function () {
+        const opened = content.style.display !== 'none';
+        content.style.display = opened ? 'none' : '';
+        toggle.classList.toggle('open', !opened);
+      });
+    }
+
+    function bindToggle(id, key) {
       const el = document.getElementById(id);
       if (!el) return;
       el.addEventListener('change', function () {
@@ -1824,7 +1726,7 @@
         if (key === 'showChip') refreshChips();
         if (key === 'showFloat') applyFloatVisibility();
       });
-    };
+    }
     bindToggle('so_next_beat_enabled', 'enabled');
     bindToggle('so_next_beat_chip', 'showChip');
     bindToggle('so_next_beat_toast', 'showToast');
@@ -1843,27 +1745,19 @@
       .replace(/>/g, '&gt;');
   }
 
-  // -------------------------------------------------------------------------
-  // 等 story-oracle
-  // -------------------------------------------------------------------------
-
   function waitForStoryOracle(callback) {
     if (window.StoryOracleAPI) { callback(); return; }
     document.addEventListener('story-oracle-ready', callback, { once: true });
     let tries = 0;
-    const timer = setInterval(() => {
+    const timer = setInterval(function () {
       tries += 1;
       if (window.StoryOracleAPI) { clearInterval(timer); callback(); }
       else if (tries > 30) { clearInterval(timer); console.warn('[next-beat] 等待故事神谕超时'); }
     }, 500);
   }
 
-  // -------------------------------------------------------------------------
-  // 启动
-  // -------------------------------------------------------------------------
-
-  jQuery(async () => {
-    waitForStoryOracle(() => {
+  jQuery(async function () {
+    waitForStoryOracle(function () {
       const api = window.StoryOracleAPI;
       if (!api) {
         console.warn('[next-beat] 没有检测到故事神谕（StoryOracleAPI），本扩展不生效');
