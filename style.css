@@ -23,6 +23,11 @@
   gap: 6px;
   align-items: flex-start;
 }
+.so-next-beat-chip-error {
+  border-color: rgba(220, 90, 90, 0.75);
+  border-style: solid;
+  background: rgba(220, 90, 90, 0.06);
+}
 .so-next-beat-chip-label {
   display: block;
   font-size: 0.82em;
@@ -59,14 +64,31 @@
 .so-next-beat-chip-foot {
   display: flex;
   gap: 6px;
+  align-items: center;
   margin-top: 8px;
   padding-top: 6px;
   border-top: 1px dashed rgba(128, 128, 128, 0.3);
 }
 .so-next-beat-chip-err {
-  font-size: 0.82em;
+  font-size: 0.85em;
   color: #e88;
   margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(220, 90, 90, 0.08);
+}
+.so-next-beat-chip-err .so-nb-err-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.so-next-beat-chip-err .so-nb-err-hint {
+  opacity: 0.85;
+  line-height: 1.4;
+}
+.so-nb-err-note {
+  font-size: 0.8em;
+  opacity: 0.6;
+  margin-left: 4px;
 }
 .so-next-beat-chip.so-nb-flash {
   border-color: rgba(74, 144, 217, 0.95);
@@ -230,15 +252,28 @@
   margin-right: 2px;
 }
 .so-nb-panel-reset:hover { opacity: 1; }
+/* ⚙ 设置按钮：Font Awesome 齿轮 + 圆形浅底，悬停变亮（更醒目） */
 .so-nb-panel-gear {
   cursor: pointer;
-  opacity: 0.75;
-  font-size: 1em;
+  font-size: 0.95em;
   line-height: 1;
-  padding: 0 6px 0 2px;
-  margin-right: 2px;
+  padding: 4px 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: rgba(128, 128, 128, 0.22);
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  min-height: 22px;
+  transition: background-color 0.15s ease, transform 0.15s ease;
 }
-.so-nb-panel-gear:hover { opacity: 1; }
+.so-nb-panel-gear:hover {
+  background: rgba(74, 144, 217, 0.5);
+  transform: scale(1.08);
+}
+.so-nb-panel-gear i { pointer-events: none; }
 .so-nb-panel-body {
   padding: 10px 14px 14px;
   display: flex;
@@ -296,7 +331,7 @@
   border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.15));
   border-radius: 12px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
-  z-index: 100001;   /* 比主面板（100000）高一档 */
+  z-index: 100001;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s ease, transform 0.15s ease;
