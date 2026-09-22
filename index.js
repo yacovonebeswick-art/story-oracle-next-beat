@@ -1,18 +1,19 @@
 // ============================================================================
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
-// v3.7.0
+// v3.7.0（含 API 报错处理 + 上下文上限 + 醒目设置图标）
 //
-// 新增（v3.7.0）：
-//   · 主面板标题栏加「⛭ 设置」按钮 —— 打开独立设置弹窗。
-//   · 设置弹窗三个折叠区：
-//       ① 连接设置 —— 用神谕的连接（默认）/ 用我自己的连接（端点+key+拉模型）
-//       ② 选项模板 DIY —— 可选；填了就把模板作为额外要求发给模型
-//       ③ 提示词（只读） —— 展示内置 system prompt，可看不可改
-//   · parseOptions 加纯文本行兜底：用户模板产出 `A. …` 也能识别成候选项。
+// 本轮新增（相对上一版）：
+//   · API 报错解析：429 / 500 / 503 / 401 / 403 / 404 / 413 / CORS / AbortError
+//     等分类成人话原因 + 建议动作 + 是否可重试。
+//   · 报错展示：楼层 chip 错误行 + toastr（绕过 showToast 开关）+ console。
+//   · 可重试错误（429 / 5xx / 408）在错误行下方给「↻ 重试」小按钮。
+//   · 上下文最高字数选项：放进 ⛭ 设置，默认 4000，范围 100~20000。
+//     仅作用于「喂给模型的最新 AI 回复正文」的截取长度。
+//   · ⛭ 设置图标换成 Font Awesome 齿轮 + 圆形浅底，悬停变亮。
 //
-// 其它（沿用 v3.6.0）：
+// 沿用：
+//   · ⛭ 设置弹窗（连接 / 选项模板 DIY / 提示词只读展示 / 上下文上限）。
 //   · 楼层 chip = 候选结果的唯一展示位。
-//   · 中心面板 / 悬浮球卡片只用来"触发生成"；点完自动收起。
 //   · 悬浮球（🧭 圆标）常驻；× 只收起卡片。
 //   · 生成默认手动；自动开关默认关。
 // ============================================================================
@@ -22,14 +23,13 @@
 
   const MODULE_ID = 'story-oracle-next-beat';
   const VERSION = '3.7.0';
-  const CFG_VERSION = 9;
+  const CFG_VERSION = 11;
 
   const DEFAULTS = {
     enabled: false,
     showChip: true,
     showToast: false,
     showFloat: false,
-    // 连接
     useOwnConnection: false,
     connEndpoint: '',
     connApiKey: '',
@@ -37,13 +37,15 @@
     connDirectViaBackend: false,
     connDirectRawUrl: false,
     connModelList: [],
-    // 选项模板 DIY
     customOptionTemplate: '',
+    maxNarrativeChars: 4000,
   };
 
   const MIN_OUTPUT_TOKENS = 4096;
   const REQUEST_TIMEOUT_MS = 240000;
   const MIN_NARRATIVE_LEN = 10;
+  const MIN_NARRATIVE_CHARS = 100;
+  const MAX_NARRATIVE_CHARS = 20000;
 
   const DONE_META_KEY = MODULE_ID + '_done';
   const DONE_KEEP_MAX = 400;
@@ -58,7 +60,7 @@
   let floatFresh = false;
   let currentAbort = null;
   let lastRequestKey = null;
-  let settingsEl = null;   // ⛭ 设置弹窗
+  let settingsEl = null;
 
   // -------------------------------------------------------------------------
   // 基础
@@ -80,6 +82,7 @@
     if (s._v === CFG_VERSION) return;
     s.enabled = false;
     if (!s.showFloat) s.showFloat = true;
+    if (!Number.isFinite(Number(s.maxNarrativeChars))) s.maxNarrativeChars = 4000;
     s._v = CFG_VERSION;
     saveSettings();
     console.log('[next-beat] 已迁移设置到 v' + CFG_VERSION);
@@ -103,6 +106,13 @@
     if (ctx && typeof ctx.saveSettingsDebounced === 'function') {
       ctx.saveSettingsDebounced();
     }
+  }
+
+  // 上下文上限（钳到 [100, 20000]，非数回退 4000）
+  function clampNarrativeChars(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return 4000;
+    return Math.max(MIN_NARRATIVE_CHARS, Math.min(MAX_NARRATIVE_CHARS, Math.round(n)));
   }
 
   // -------------------------------------------------------------------------
@@ -182,6 +192,95 @@
   }
 
   // -------------------------------------------------------------------------
+  // ⚠ API 报错解析
+  // -------------------------------------------------------------------------
+
+  // 从错误对象里抽 HTTP 状态码。可能藏在：
+  //   · err.status / err.statusCode / err.response.status
+  //   · err.message 里的 "HTTP 429" / "429 Too Many Requests"
+  function extractHttpStatus(err) {
+    if (!err) return null;
+    const cands = [
+      err.status, err.statusCode,
+      err.response && err.response.status,
+      err.cause && err.cause.status,
+    ];
+    for (const c of cands) {
+      const n = Number(c);
+      if (Number.isInteger(n) && n >= 100 && n < 600) return n;
+    }
+    const m = String(err.message || '').match(/\bHTTP\s+(\d{3})\b/i)
+      || String(err.message || '').match(/\b(\d{3})\s+(?:Too Many|Internal|Service|Unauthorized|Forbidden|Not Found|Bad Request|Request Entity|Gateway|Request Timeout)/i);
+    if (m) {
+      const n = Number(m[1]);
+      if (Number.isInteger(n) && n >= 100 && n < 600) return n;
+    }
+    return null;
+  }
+
+  // 状态码 → 人话 + 建议 + 是否可重试
+  function statusInfo(code) {
+    switch (code) {
+      case 400: return { title: '请求无效（400）', hint: '参数错误或上下文超长——可缩小「上下文最高字数」，或换一个模型。', retriable: false };
+      case 401: return { title: '密钥无效（401）', hint: 'API 密钥错误或已失效——到 ⛭ 设置里检查端点与密钥。', retriable: false };
+      case 403: return { title: '拒绝访问（403）', hint: '密钥无权访问该模型，或账号被限制——检查密钥权限。', retriable: false };
+      case 404: return { title: '端点/模型不存在（404）', hint: '端点 URL 或模型名不对——到 ⛭ 设置里核对，或重新「拉取模型列表」。', retriable: false };
+      case 408: return { title: '请求超时（408）', hint: '服务端等待超时——稍后重试。', retriable: true };
+      case 413: return { title: '请求体过大（413）', hint: '上下文太长——把「上下文最高字数」调小再试。', retriable: false };
+      case 429: return { title: '限速（429 Too Many Requests）', hint: '请求过于频繁或额度耗尽——稍后再试，或换一个 key / 模型。', retriable: true };
+      case 500: return { title: '服务端错误（500）', hint: '上游服务器出错——稍后重试，或换一个端点。', retriable: true };
+      case 502: return { title: '网关错误（502）', hint: '中转网关出错——稍后重试，或换一个端点。', retriable: true };
+      case 503: return { title: '服务不可用（503）', hint: '服务过载或维护中——稍后重试，或换一个端点。', retriable: true };
+      case 504: return { title: '网关超时（504）', hint: '中转网关超时——稍后重试，或换一个端点。', retriable: true };
+      default:
+        if (code >= 500) return { title: `服务端错误（${code}）`, hint: '上游服务器出错——稍后重试。', retriable: true };
+        if (code >= 400) return { title: `请求错误（${code}）`, hint: '请求被拒绝——检查端点 / 密钥 / 模型。', retriable: false };
+        return { title: `HTTP ${code}`, hint: '服务端返回了错误——请检查配置。', retriable: false };
+    }
+  }
+
+  // 把任何错误对象/字符串分类成 {kind, title, hint, retriable, raw}
+  //   kind ∈ 'abort' | 'http' | 'cors' | 'network' | 'config' | 'unknown'
+  function classifyApiError(err) {
+    if (!err) return { kind: 'unknown', title: '未知错误', hint: '', retriable: false, raw: '' };
+    if (err.name === 'AbortError') {
+      return { kind: 'abort', title: '', hint: '', retriable: false, raw: '' };
+    }
+    const raw = String((err && err.message) || err || '');
+    // CORS / 网络失败
+    if (/Failed to fetch|NetworkError|ERR_NETWORK|ERR_CONNECTION|CORS|Access-Control/i.test(raw)) {
+      return {
+        kind: 'cors',
+        title: '网络 / 跨域被拦',
+        hint: '浏览器直连被跨域（CORS）拦下——到 ⛭ 设置里勾上「经酒馆后端转发」，或换一个支持浏览器直连的端点。',
+        retriable: false,
+        raw,
+      };
+    }
+    // HTTP 状态
+    const code = extractHttpStatus(err);
+    if (code) {
+      const info = statusInfo(code);
+      return { kind: 'http', title: info.title, hint: info.hint, retriable: info.retriable, raw, status: code };
+    }
+    // 我们自己的配置类错误（sendWithOwnConnection 里 throw 的）
+    if (/请先|未配置|不可用|缺少/.test(raw)) {
+      return { kind: 'config', title: '配置未完成', hint: raw, retriable: false, raw };
+    }
+    return { kind: 'unknown', title: '未知错误', hint: raw.slice(0, 200), retriable: false, raw };
+  }
+
+  // 错误 toastr（绕过 showToast 开关 —— 出错必须让你看见）
+  function notifyError(kind, message) {
+    try {
+      if (!window.toastr) return;
+      if (window.toastr.error) {
+        window.toastr.error(message, '🧭 下一拍建议 · ' + kind, { timeOut: 8000, extendedTimeOut: 4000 });
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // -------------------------------------------------------------------------
   // Prompt
   // -------------------------------------------------------------------------
 
@@ -225,6 +324,11 @@
 
   function buildUserPrompt(narrativeText, beatInfo) {
     const s = loadSettings();
+    const maxChars = clampNarrativeChars(s.maxNarrativeChars);
+    const trimmed = narrativeText.length > maxChars
+      ? narrativeText.slice(-maxChars)
+      : narrativeText;
+
     const parts = [];
     if (beatInfo && beatInfo.goal) {
       parts.push('【当前引导序列】' + (beatInfo.seqTitle || '(未命名)') +
@@ -237,7 +341,7 @@
     }
     parts.push('【刚写完的正文（仅供参考，不要复述）】');
     parts.push('"""');
-    parts.push(narrativeText.slice(-4000));
+    parts.push(trimmed);
     parts.push('"""');
     parts.push('');
     if (beatInfo && beatInfo.goal) {
@@ -251,7 +355,6 @@
         '其中至少一条应当是【紧接着上一句正文】的即时回应/行动。');
     }
 
-    // 用户自定义选项模板（若填了）—— 追加在 user 消息末尾，作为额外要求
     const tpl = String(s.customOptionTemplate || '').trim();
     if (tpl) {
       parts.push('');
@@ -277,7 +380,6 @@
     const src = String(text || '');
     const out = [];
 
-    // 第一路：内置格式 `**标签** 内容`
     const reLabeled = /^\s*\*\*([^*\n]+?)\*\*\s+(.+?)\s*$/;
     for (const line of src.split(/\r?\n/)) {
       if (!line.trim()) continue;
@@ -288,23 +390,14 @@
       if (!label || !content) continue;
       out.push({ label, content, raw: line.trim() });
     }
-
     if (out.length) return dedupOptions(out);
 
-    // 第二路（兜底）：用户模板产出的纯文本行，例如：
-    //   A.xxx（以Ne功能为主导的选项）
-    //   A. 我推门进去。
-    //   - 我推门进去。
-    //   1) 我推门进去。
-    // 规则：剥掉行首的「字母/数字 + . 、) ）」或「- / * 」编号符号，
-    //       剩下的内容作为候选项；标签默认给 [选项]。
-    // 过滤：去掉代码块标记 ```、纯括号 / 引号、长度 < 4 的行。
     const rePlain = /^\s*(?:([A-Za-z]|\d{1,2})[\.\)、）\s]|[-*•·])\s*(.+?)\s*$/;
     for (const line of src.split(/\r?\n/)) {
       const t = line.trim();
       if (!t) continue;
       if (/^```/.test(t)) continue;
-      if (/^<\/?(?:branches|details|summary)\b/i.test(t)) continue;   // 常见 HTML 包裹标签，跳过
+      if (/^<\/?(?:branches|details|summary)\b/i.test(t)) continue;
       const m = t.match(rePlain);
       if (!m) continue;
       const content = m[2].trim();
@@ -334,8 +427,7 @@
   async function requestNextBeatOptions(narrativeText, beatInfo) {
     const api = window.StoryOracleAPI;
     if (!api) {
-      console.warn('[next-beat] 未检测到 StoryOracleAPI，跳过');
-      return null;
+      throw new Error('未检测到故事神谕（StoryOracleAPI）');
     }
 
     const s = loadSettings();
@@ -372,10 +464,6 @@
       }
       text = String(text || '').trim();
       return parseOptions(text);
-    } catch (err) {
-      if (err && err.name === 'AbortError') return null;
-      console.error('[next-beat] 调用失败：', err);
-      throw err;
     } finally {
       clearTimeout(timer);
       if (currentAbort === ctl) currentAbort = null;
@@ -401,15 +489,24 @@
 
     if (s.connDirectViaBackend) return await sendViaSTBackend(url, headers, body, signal);
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ ...body, stream: false }),
-      signal,
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ ...body, stream: false }),
+        signal,
+      });
+    } catch (netErr) {
+      // 网络层失败（CORS / 断网）——抛原始 err，classifyApiError 会认出
+      throw netErr;
+    }
     if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status} ${res.statusText} ${t.slice(0, 300)}`);
+      let t = '';
+      try { t = await res.text(); } catch (e) { /* ignore */ }
+      const e = new Error(`HTTP ${res.status} ${res.statusText} ${String(t).slice(0, 300)}`);
+      e.status = res.status;
+      throw e;
     }
     const data = await res.json();
     return data?.choices?.[0]?.message?.content ?? '';
@@ -462,8 +559,11 @@
     const signal = (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) ? AbortSignal.timeout(20000) : undefined;
     const res = await fetch(url, { method: 'GET', headers, signal });
     if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status} ${res.statusText} ${t.slice(0, 200)}`);
+      let t = '';
+      try { t = await res.text(); } catch (e) { /* ignore */ }
+      const e = new Error(`HTTP ${res.status} ${res.statusText} ${String(t).slice(0, 200)}`);
+      e.status = res.status;
+      throw e;
     }
     const data = await res.json();
     const list = Array.isArray(data?.data) ? data.data
@@ -567,6 +667,73 @@
     btn.textContent = '生成建议';
     btn.addEventListener('click', (e) => { e.stopPropagation(); triggerGenerateForMessage(messageId); });
     chip.appendChild(btn);
+
+    const anchor = $mes.querySelector('.mes_text');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(chip, anchor.nextSibling);
+    else $mes.appendChild(chip);
+  }
+
+  function renderChipError(messageId, beatInfo, errInfo, retryCb) {
+    const s = loadSettings();
+    if (!s.showChip) return;
+    const $mes = document.querySelector('.mes[mesid="' + messageId + '"]');
+    if (!$mes) return;
+    removeChip(messageId);
+
+    const chip = document.createElement('div');
+    chip.id = chipIdFor(messageId);
+    chip.className = 'so-next-beat-chip so-next-beat-chip-idle so-next-beat-chip-error';
+
+    const label = document.createElement('span');
+    label.className = 'so-next-beat-chip-label';
+    label.textContent = beatInfo && beatInfo.goal
+      ? `🧭 下一拍建议 · 第 ${beatInfo.progress} 拍`
+      : '🧭 下一拍建议';
+    chip.appendChild(label);
+
+    if (beatInfo && beatInfo.goal) {
+      const g = document.createElement('div');
+      g.className = 'so-next-beat-chip-goal';
+      g.textContent = '目标：' + beatInfo.goal;
+      chip.appendChild(g);
+    }
+
+    const errBox = document.createElement('div');
+    errBox.className = 'so-next-beat-chip-err';
+    const titleEl = document.createElement('div');
+    titleEl.className = 'so-nb-err-title';
+    titleEl.textContent = '⚠ ' + (errInfo.title || '生成失败');
+    errBox.appendChild(titleEl);
+    if (errInfo.hint) {
+      const hintEl = document.createElement('div');
+      hintEl.className = 'so-nb-err-hint';
+      hintEl.textContent = errInfo.hint;
+      errBox.appendChild(hintEl);
+    }
+    chip.appendChild(errBox);
+
+    const foot = document.createElement('div');
+    foot.className = 'so-next-beat-chip-foot';
+
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'so-next-beat-chip-btn';
+    retry.textContent = '↻ 重试';
+    retry.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (typeof retryCb === 'function') retryCb();
+      else triggerGenerateForMessage(messageId);
+    });
+    foot.appendChild(retry);
+
+    if (errInfo.retriable) {
+      const note = document.createElement('span');
+      note.className = 'so-nb-err-note';
+      note.textContent = '可稍后重试';
+      foot.appendChild(note);
+    }
+
+    chip.appendChild(foot);
 
     const anchor = $mes.querySelector('.mes_text');
     if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(chip, anchor.nextSibling);
@@ -740,32 +907,44 @@
     lastRequestKey = myKey;
 
     let out = null;
-    let errMsg = '';
+    let caughtErr = null;
     try { out = await generateOptionsForMessage(messageId); }
-    catch (e) { errMsg = String((e && e.message) || e); }
+    catch (e) { caughtErr = e; }
     finally { dismissToast(busyToast); }
 
     if (lastRequestKey !== myKey) return;
     const cur = ctx.chat[messageId];
     if (!cur || ((cur.swipe_id || 0) !== (m.swipe_id || 0))) return;
 
-    if (!out || !out.options || !out.options.length) {
-      renderChipIdle(messageId, getActiveBeatInfo());
-      const idleChip = document.getElementById(chipIdFor(messageId));
-      if (idleChip) {
-        const tip = document.createElement('div');
-        tip.className = 'so-next-beat-chip-err';
-        tip.textContent = errMsg ? ('（生成失败：' + errMsg + '）') : '（这次没能生成，看看控制台）';
-        idleChip.appendChild(tip);
-      }
+    // 生成成功
+    if (out && out.options && out.options.length) {
+      setLast({ options: out.options, beatInfo: out.beatInfo, messageId });
+      renderChipWithOptions(messageId, out.options, out.beatInfo);
+      showSuggestionToast(out.options);
+      notifyFloatNewOptions();
+      markDone(myKey);
       return;
     }
 
-    setLast({ options: out.options, beatInfo: out.beatInfo, messageId });
-    renderChipWithOptions(messageId, out.options, out.beatInfo);
-    showSuggestionToast(out.options);
-    notifyFloatNewOptions();
-    markDone(myKey);
+    // 失败：分类报错
+    const info = classifyApiError(caughtErr || new Error('模型没有返回可解析的候选'));
+    // AbortError：静默返回（用户取消 / 内部顶替）
+    if (info.kind === 'abort') return;
+
+    // 无候选但也没抛错（模型返回了空 / 格式错）
+    if (!caughtErr) {
+      info.title = '模型没有返回可解析的候选';
+      info.hint = '模型可能返回了空 / 纯文本 / 不符合格式的内容——可「↻ 重试」，或到 ⛭ 设置里填「选项模板 DIY」明确格式。';
+      info.retriable = true;
+    }
+
+    console.error('[next-beat] 生成失败：', caughtErr || '(空候选)', info);
+
+    // 弹 toastr（绕过 showToast）
+    notifyError(info.title || '生成失败', info.hint || '请到浏览器控制台查看详情');
+
+    // chip 里出错误行 + ↻ 重试
+    renderChipError(messageId, getActiveBeatInfo(), info, () => triggerGenerateForMessage(messageId));
   }
 
   function showBusyToast() {
@@ -928,6 +1107,20 @@
         </details>
 
         <details class="so-nb-set-group">
+          <summary>生成设置</summary>
+          <div class="so-nb-set-group-body">
+            <label class="so-nb-field">
+              <span>上下文最高字数（喂给模型的最新正文最多截取多少字；越大越准但越贵）</span>
+              <input type="number" id="so-nb-set-maxchars" value="${clampNarrativeChars(s.maxNarrativeChars)}" min="${MIN_NARRATIVE_CHARS}" max="${MAX_NARRATIVE_CHARS}" step="100">
+            </label>
+            <p class="so-nb-panel-label-hint" style="margin-left:0;">
+              范围 ${MIN_NARRATIVE_CHARS}~${MAX_NARRATIVE_CHARS} 字；默认 4000。<br>
+              只作用于「最新一条 AI 回复的正文」；拍目标、模板等不占这个上限。
+            </p>
+          </div>
+        </details>
+
+        <details class="so-nb-set-group">
           <summary>选项模板 DIY（可选）</summary>
           <div class="so-nb-set-group-body">
             <p class="so-nb-panel-label-hint" style="margin-left:0;">
@@ -935,7 +1128,7 @@
               填写后会把你的模板作为额外要求发给模型，让模型按模板产出选项。<br>
               你可以自定义选项数量、每条选项的主导方向、格式与结构。
             </p>
-            <textarea id="so-nb-set-tpl" rows="10" placeholder="例如：&#10;<branches>&#10;<details>&#10;  <summary>🍬外向思维</summary>&#10;&#10;A.xxx（以Ne功能为主导的选项）&#10;B.xxx（以Fe功能为主导的选项）&#10;C.xxx（以Se功能为主导的选项）&#10;D.xxx（以Te功能为主导的选项）&#10;</details>&#10;</branches>"></textarea>
+            <textarea id="so-nb-set-tpl" rows="10" placeholder="例如：&#10;<branches>&#10;<details>&#10;  <summary>🍬外向思维</summary>&#10;&#10;A.xxx（以Ne功能为主导的选项）&#10;B.xxx（以Fe功能为主导的选项）&#10;C.xxx（以Se功能为主导的选项）&#10;D.xxx（以Te功能为主导的选项）&#10;</details>&#10;</branches>">${escapeText(s.customOptionTemplate)}</textarea>
             <p class="so-nb-panel-label-hint" style="margin-left:0;">
               ℹ 衔接上下文（本拍目标 + 最近正文）与「所有候选最终要推向本拍目标」的根本要求锁定，不因模板而改变。
             </p>
@@ -957,7 +1150,6 @@
     `;
     document.body.appendChild(settingsEl);
 
-    // 位置恢复
     (function applyStoredPos() {
       const p = loadSettingsPos();
       if (!p) return;
@@ -975,7 +1167,6 @@
     });
     settingsEl.querySelector('#so-nb-set-close').addEventListener('click', closeSettings);
 
-    // 拖动
     (function wireDrag() {
       const handle = settingsEl.querySelector('#so-nb-set-drag-handle');
       let sx = 0, sy = 0, sl = 0, st = 0, pid = null, moved = false;
@@ -1018,7 +1209,6 @@
       handle.addEventListener('pointercancel', end);
     })();
 
-    // 连接模式
     settingsEl.querySelector('#so-nb-set-use-sy').addEventListener('change', function () {
       if (!this.checked) return;
       const st = loadSettings();
@@ -1034,7 +1224,6 @@
       applySettingsConnVisibility();
     });
 
-    // 字段绑定
     const bindInput = (id, key) => {
       const el = settingsEl.querySelector(id);
       el.addEventListener('input', function () {
@@ -1047,7 +1236,21 @@
     bindInput('#so-nb-set-apikey', 'connApiKey');
     bindInput('#so-nb-set-tpl', 'customOptionTemplate');
 
-    // 开关绑定
+    // 上下文上限：input 变化存原始值；blur / change 时钳到范围
+    const maxCharsEl = settingsEl.querySelector('#so-nb-set-maxchars');
+    maxCharsEl.addEventListener('input', function () {
+      const st = loadSettings();
+      st.maxNarrativeChars = this.value;
+      saveSettings();
+    });
+    maxCharsEl.addEventListener('change', function () {
+      const v = clampNarrativeChars(this.value);
+      this.value = String(v);
+      const st = loadSettings();
+      st.maxNarrativeChars = v;
+      saveSettings();
+    });
+
     const bindToggle = (id, key) => {
       const el = settingsEl.querySelector(id);
       el.addEventListener('change', function () {
@@ -1059,7 +1262,6 @@
     bindToggle('#so-nb-set-backend', 'connDirectViaBackend');
     bindToggle('#so-nb-set-rawurl', 'connDirectRawUrl');
 
-    // 拉取模型
     settingsEl.querySelector('#so-nb-set-fetch').addEventListener('click', async () => {
       const btn = settingsEl.querySelector('#so-nb-set-fetch');
       const status = settingsEl.querySelector('#so-nb-set-status');
@@ -1082,7 +1284,8 @@
         renderSettingsModelSelect();
         status.textContent = `✓ 拉取到 ${list.length} 个模型`;
       } catch (err) {
-        status.textContent = '拉取失败：' + ((err && err.message) || err);
+        const info = classifyApiError(err);
+        status.textContent = '拉取失败：' + (info.title || err.message || err) + (info.hint ? '——' + info.hint : '');
         status.classList.add('so-nb-conn-status-err');
         console.error('[next-beat] 拉取模型失败：', err);
       } finally {
@@ -1091,14 +1294,12 @@
       }
     });
 
-    // 模型下拉
     settingsEl.querySelector('#so-nb-set-model-select').addEventListener('change', function () {
       const st = loadSettings();
       st.connModel = this.value;
       saveSettings();
     });
 
-    // 提示词只读展示
     settingsEl.querySelector('#so-nb-set-sysprompt').value = SYSTEM_PROMPT;
 
     return settingsEl;
@@ -1135,7 +1336,7 @@
     panelEl.innerHTML = `
       <div class="so-nb-panel-header" id="so-nb-panel-drag-handle" title="按住可拖动此窗口">
         <span>🧭 下一拍建议</span>
-        <span class="so-nb-panel-gear" id="so-nb-panel-gear" title="设置">⛭</span>
+        <span class="so-nb-panel-gear" id="so-nb-panel-gear" title="设置"><i class="fa-solid fa-gear"></i></span>
         <span class="so-nb-panel-reset" id="so-nb-panel-reset" title="重置到默认位置">⌖</span>
         <span class="so-nb-panel-close" title="关闭">×</span>
       </div>
@@ -1156,7 +1357,7 @@
           <input type="checkbox" id="so-nb-panel-float" ${s.showFloat ? 'checked' : ''}>
           悬浮窗常驻（折叠成 🧭 圆标）
         </label>
-        <p class="so-nb-panel-label-hint">连接 / 模板 / 提示词都在 ⛭ 设置里。</p>
+        <p class="so-nb-panel-label-hint">连接 / 模板 / 提示词 / 上下文上限都在 ⛭ 设置里。</p>
 
         <div class="so-nb-panel-label">当前拍：</div>
         <div class="so-nb-panel-beat" id="so-nb-panel-beat">（未在引导序列中）</div>
@@ -1250,7 +1451,6 @@
     bindToggle('#so-nb-panel-toast', 'showToast');
     bindToggle('#so-nb-panel-float', 'showFloat');
 
-    // 面板 = 快捷生成
     panelEl.querySelector('#so-nb-panel-regen').addEventListener('click', async () => {
       const ctx = getCtx();
       if (!ctx || !ctx.chat || !ctx.chat.length) return;
@@ -1607,7 +1807,7 @@
         悬浮窗常驻（折叠成 🧭 圆标）
       </label>
       <p style="opacity:0.7; font-size:0.85em;">
-        连接 / 模板 / 提示词都在 🧭 面板里的 ⛭ 设置中。
+        连接 / 模板 / 提示词 / 上下文上限都在 🧭 面板里的 ⛭ 设置中。
       </p>
     `;
     container.appendChild(div);
@@ -1635,6 +1835,12 @@
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
     });
+  }
+  function escapeText(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   // -------------------------------------------------------------------------
