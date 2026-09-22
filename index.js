@@ -1,6 +1,7 @@
 // ============================================================================
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
-// v3.7.0（含 API 报错处理 + 上下文上限 + 醒目设置图标 + 扩展设置可折叠）
+// v3.7.0（含 API 报错处理 + 上下文上限 + 醒目设置图标 + 扩展设置可折叠
+//        + 选项填入时带人名前缀）
 // ============================================================================
 
 (function () {
@@ -542,6 +543,18 @@
     return 'so-nb-lbl-role';
   }
 
+  // 把选项转成「填进输入框」的文本：
+  //   · 我 / 时间 → 不加前缀（原文本身已是自然形式）
+  //   · 其它标签（角色名 / 角色X / 选项）→ 加「标签：」前缀
+  // chip 里显示的 [标签] 是视觉标签，不进入输入框。
+  function formatOptionForInput(opt) {
+    const label = String((opt && opt.label) || '').trim();
+    const content = String((opt && opt.content) || '').trim();
+    if (!label || !content) return content;
+    if (label === LBL_USER || label === LBL_TIME) return content;
+    return label + '：' + content;
+  }
+
   function buildOptionsList(options, opts) {
     const list = document.createElement('div');
     list.className = 'so-nb-options';
@@ -565,7 +578,7 @@
       row.appendChild(tag);
       row.appendChild(txt);
       row.addEventListener('click', function () {
-        if (opts && typeof opts.onPick === 'function') opts.onPick(o.content);
+        if (opts && typeof opts.onPick === 'function') opts.onPick(formatOptionForInput(o));
       });
       list.appendChild(row);
     }
@@ -724,7 +737,7 @@
     fillAll.title = '把全部候选按行填入输入框';
     fillAll.addEventListener('click', function (e) {
       e.stopPropagation();
-      const all = options.map(function (o) { return '[' + o.label + '] ' + o.content; }).join('\n');
+      const all = options.map(function (o) { return formatOptionForInput(o); }).join('\n');
       fillInput(all);
     });
     foot.appendChild(fillAll);
