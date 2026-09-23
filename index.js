@@ -1,6 +1,7 @@
 // ============================================================================
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
 // v3.7.0
+// 【已缝合：导演锁强制约束系统】
 // ============================================================================
 
 (function () {
@@ -11,6 +12,34 @@
   const CFG_VERSION = 15;
 
   const ORACLE_SETTINGS_KEY = 'storyOracle';
+
+  // ==========================================================
+  // 【导演锁】硬编码约束词（核心防OOC、防转场、防装逼）
+  // ==========================================================
+  const DIRECTOR_LOCK = `
+【导演系统强制约束（最高优先级，无视任何与之冲突的设定）】
+你现在的任务是推演下一拍剧情。必须绝对遵守以下红线，违者视为生成失败：
+
+1. 【场景锁：绝对禁止蒙太奇】
+- 严禁擅自切换场景、打车、回家或跳过时间。剧情必须发生在当前物理位置的下一秒。
+- 如果必须移动（如去酒店），必须描写从当前场景出发的连续物理动作，不得省略中间过程。绝对禁止“时间一晃就到了”这种写法。
+
+2. 【防OOC锁：User普通人化】（绝对红线）
+- 绝对禁止 {{user}} 说出任何超出其职业设定的学术专业术语（如：心理学、医学、生物学、物理学、高级艺术评论）。
+- 绝对禁止 {{user}} 进行长篇大论的说教、心理分析、逻辑推演或降维打击。
+- 强制 {{user}} 的反应模式：必须像一个普通人一样，用最接地气的大白话、市井智慧、本能反应或直接的肢体动作来应对突发状况。遇到危机时，仅可使用物理手段解决。遇到不懂的问题，必须表现出普通人的懵逼或转移话题。
+
+3. 【NPC与剧情推演】
+- NPC的台词必须符合其性格设定，多用生活化口语。
+- 禁止把日常对话上升到心理学、人类潜意识或哲学高度。保持剧情的日常感和松弛感。
+`;
+
+  // 屏蔽违禁词的后处理正则（可选，若不想屏蔽可将此数组清空）
+  const BANNED_WORDS = [
+    '皮质醇', '交感神经', '内分泌紊乱', '心理防御机制', '多巴胺', 
+    '潜意识投射', '认知失调', '降维打击', '逻辑闭环', '精神分析',
+    '创伤后应激', '神经递质', '边缘系统'
+  ];
 
   const DEFAULT_OPTION_TEMPLATE = `# 【选项思维链 - 代号：午夜提词器 / MBTI 八维选项专用】
 
@@ -427,6 +456,18 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     '吕子乔：他靠在墙边，抱着胳膊没说话。\n' +
     '时间：半小时后，天色完全暗了下来。';
 
+  // ==========================================================
+  // 【导演锁】清洗函数：拦截 AI 返回的文本，强制清除违禁词
+  // ==========================================================
+  function sanitizeDirectorLock(text) {
+    let cleaned = String(text || '');
+    for (const word of BANNED_WORDS) {
+      const reg = new RegExp(word, 'g');
+      cleaned = cleaned.replace(reg, '[该词已被导演锁屏蔽]');
+    }
+    return cleaned;
+  }
+
   function buildUserPrompt(narrativeText, beatInfo) {
     const s = loadSettings();
     const maxChars = clampNarrativeChars(s.maxNarrativeChars);
@@ -435,6 +476,14 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       : narrativeText;
 
     const parts = [];
+
+    // ★★★ 核心注入点：把导演锁放在所有内容的最前面 ★★★
+    // 并使用 ctx 上下文里的用户名称替换 {{user}} 占位符
+    const ctx = getCtx();
+    const userName = ctx ? (ctx.name1 || 'User') : 'User';
+    parts.push(DIRECTOR_LOCK.replace(/\{\{user\}\}/g, userName));
+    // ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+
     if (beatInfo && beatInfo.goal) {
       parts.push('【当前引导序列】' + (beatInfo.seqTitle || '(未命名)') +
         '（第 ' + beatInfo.progress + ' 拍）');
@@ -705,6 +754,8 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
         text = await sendWithOwnConnection(messages, maxTokens, s, ctl.signal);
       }
       text = String(text || '').trim();
+      // ★★★ 核心清洗点：调用导演锁清洗函数，过滤违禁词 ★★★
+      text = sanitizeDirectorLock(text);
       return parseOptions(text);
     } finally {
       clearTimeout(timer);
@@ -2161,7 +2212,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       watchWandMenu();
       refreshChips();
       applyFloatVisibility();
-      console.log('[next-beat] 已加载（v' + VERSION + '）');
+      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁强化版）');
     });
   });
 })();
