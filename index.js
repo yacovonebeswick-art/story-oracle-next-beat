@@ -1,7 +1,7 @@
 // ============================================================================
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
 // v3.7.0
-// 【已缝合：导演锁 + 分镜强制切分】
+// 【已缝合：导演锁 + 分镜强制切分 + 镜头锁定（防转场）】
 // ============================================================================
 
 (function () {
@@ -929,15 +929,25 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return 'so-nb-lbl-role';
   }
 
-  // 填入输入框时的前缀规则 ——
-  //   我 / 时间 → 不带前缀（原文即自然形式）；
-  //   其它标签（角色名 / 角色A / 选项）→ 带「标签：」前缀。
+  // 填入输入框时的前缀规则
   function formatOptionForInput(opt) {
     const label = String((opt && opt.label) || '').trim();
     const content = String((opt && opt.content) || '').trim();
     if (!label || !content) return content;
-    if (label === LBL_USER || label === LBL_TIME) return content;
-    return label + '：' + content;
+
+    // 「我」标签：直接给内容，不加前缀
+    if (label === LBL_USER) return content;
+
+    // ★★★ 分镜拍/时间拍/角色拍：强制加入“镜头锁定”指令 ★★★
+    // 这会让主模型在生成正文时，强制聚焦于当前分镜场景，严禁写User的过渡动作
+    const sceneLockPrompt = `【镜头锁定：本回合仅限描写此场景，绝对禁止描写用户（User）离开当前所在位置、打车、回家、或者任何转场过渡动作。直接从当前分镜场景开始描写。】\n`;
+    
+    if (label === LBL_TIME) {
+      return sceneLockPrompt + label + '：' + content;
+    }
+
+    // 角色标签（分镜专用）
+    return sceneLockPrompt + label + '：' + content;
   }
 
   function buildOptionsList(options, opts) {
@@ -2252,7 +2262,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       watchWandMenu();
       refreshChips();
       applyFloatVisibility();
-      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁强化版）');
+      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 镜头锁定版）');
     });
   });
 })();
