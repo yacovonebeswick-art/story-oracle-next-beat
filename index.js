@@ -2,7 +2,6 @@
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
 // v3.7.1
 // 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁】
-// v3.7.1：新增「切拍感知」——数据层轮询 + DOM ▶ 兜底
 // ============================================================================
 
 (function () {
@@ -67,9 +66,14 @@
     '皮质醇', '交感神经', '内分泌紊乱', '心理防御机制', '多巴胺',
     '潜意识投射', '认知失调', '降维打击', '逻辑闭环', '精神分析',
     '创伤后应激', '神经递质', '边缘系统',
+    // ★ 氛围向（压冷冰冰，怕误伤可删）
     '面无表情', '神色淡漠', '不为所动', '波澜不惊', '无动于衷',
   ];
 
+  // 判定分镜/转场拍的关键词 —— 只在【拍标题】里判。
+  // 删掉 '同时' / '另一边'：这两个词太容易在正常拍标题里自然出现
+  //（比如「同时处理两件事」），会造成大面积误判，把普通拍当成分镜拍，
+  // 导致「我：」选项一条都不出。
   const CUT_SCENE_KEYWORDS = ['分镜', '转场', '切到', '视角切', 'B线', '支线', '分镜拍'];
 
   const DEFAULT_OPTION_TEMPLATE = `# 【选项思维链 - 代号：午夜提词器 / MBTI 八维选项专用】
@@ -233,13 +237,11 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   let currentAbort = null;
   let lastRequestKey = null;
   let settingsEl = null;
+  // 本次请求是否在途（只由 requestNextBeatOptions 设 / 清）
   let isGeneratingBeat = false;
-
   // 轮询用：上一次看到的「当前拍签名」与定时器句柄
   let lastBeatSig = null;
   let beatPollTimer = null;
-  // DOM 兜底：上一次读到的「神谕左侧 UI 高亮的拍序号」（1-based）
-  let lastDomBeatIndex = null;
 
   function getCtx() {
     return (typeof SillyTavern !== 'undefined' && SillyTavern.getContext)
@@ -307,7 +309,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       }
     } catch (e) { /* ignore */ }
     const chosen = own > 0 ? own : base;
-    return Math.max(chosen, MIN_OUTPUT_TOKENS);
+    return Math.max(chosen, MIN_OUTPUT_TOKENS);   // 4096 地板
   }
 
   function readDoneSet() {
@@ -483,8 +485,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   // 【当前拍签名】
   // ----------------------------------------------------------
   // 把「当前是哪一拍」压成一个短字符串，用于轮询比对。
-  // v3.7.1 起，签名里除了数据层，还补了 DOM ▶ 序号 —— 这样即使
-  // 神谕数据层在「点完成」和「生成」之间不刷新，DOM 变了也能触发。
+  // 组成：聊天键 + 拍序号 + 总拍数 + 拍标题 + 本拍目标 + DOM ▶ 序号。
+  // 任一变化（换聊天 / 切拍 / 改标题 / 改目标 / DOM 上 ▶ 换了）都会得到不同签名。
+  // 不在引导序列中时返回 ''，与「有拍」区分开。
   // ==========================================================
   function currentBeatSignature() {
     const info = getActiveBeatInfo();
@@ -530,8 +533,15 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   // ==========================================================
   // 【拍变化轮询】
   // ----------------------------------------------------------
-  // 每 1 秒跑一次：签名变了 → 刷新面板 / 重挂 chip / 刷新悬浮球，
+  // 每 1 秒跑一次：签名变了 → 刷新面板 / 清掉旧候选 chip / 刷新悬浮球，
   // 并且做一次 DOM ↔ 数据层对账。
+  //
+  // ⚠ 为什么是 removeAllChips 而不是 refreshChips：
+  //   refreshChips = removeAllChips + rehangChips，而 rehangChips 用的是
+  //   lastByChat[key].options + entry.beatInfo —— 那是【上一次生成那一刻】的快照。
+  //   切拍之后，那份快照属于【上一拍】，重挂出来只会让用户误以为旧候选还对应新拍。
+  //   所以切拍时把旧 chip 清掉，让「旧拍的候选已过期」这件事从视觉上如实发生。
+  //   （lastByChat 里的记录本身保留 —— 供切回该拍时对照 / 定位。）
   // 幂等：签名没变时什么都不做。
   // ==========================================================
   function checkBeatChanged() {
@@ -548,7 +558,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     try {
       updatePanel();
       reconcilePanelWithDom();
-      refreshChips();
+      removeAllChips();      // 旧候选属于旧拍 —— 切拍后清掉，不重挂
       updateFloatStatus();
     } catch (e) {
       console.error('[next-beat] 切拍刷新失败：', e);
@@ -2135,19 +2145,39 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     if (el) el.textContent = text;
   }
 
+  // ==========================================================
+  // 【面板刷新】—— 「当前拍」一栏【永远现读】getActiveBeatInfo()
+  // ----------------------------------------------------------
+  // ⚠ 这是 3.7.1 的语义修正点：
+  //   面板上那一栏叫「当前拍」，它的语义是「神谕此刻在哪一拍」，
+  //   所以必须现读 getActiveBeatInfo()。
+  //
+  //   绝不能读 entry.beatInfo —— 那是【上一次生成候选那一刻】的拍快照，
+  //   它的正确用途只有一个：给 chip 标注「这批候选属于哪一拍」。
+  //   切拍之后（用户点完成 / 神谕推进），entry.beatInfo 依旧是旧拍，
+  //   若拿它填「当前拍」一栏，面板就会一直停在旧拍，直到手动生成一次
+  //   才更新 —— 这正是之前那个「切拍不更新」的病灶。
+  //
+  //   entry.options（最近一次生成的候选）仍读 entry：面板那栏写的就是
+  //   「最近一次生成」。
+  // ==========================================================
   function updatePanel() {
     if (!panelEl || !panelEl.isConnected) return;
+
+    // 最近一次生成（候选）：读 entry —— 语义就是「最近一次生成」。
     const entry = getLast();
     if (entry && Array.isArray(entry.options) && entry.options.length) {
       setPanelSuggestion(entry.options);
-      const b = entry.beatInfo;
-      if (b && b.goal) setPanelBeat('第 ' + b.progress + ' 拍' + (b.beatTitle ? ' · ' + b.beatTitle : '') + '\n目标：' + b.goal);
-      else setPanelBeat('（未在引导序列中）');
     } else {
       setPanelSuggestion(null);
-      const b = getActiveBeatInfo();
-      if (b && b.goal) setPanelBeat('第 ' + b.progress + ' 拍' + (b.beatTitle ? ' · ' + b.beatTitle : '') + '\n目标：' + b.goal);
-      else setPanelBeat('（未在引导序列中）');
+    }
+
+    // 当前拍：现读 getActiveBeatInfo()，不读 entry.beatInfo。
+    const b = getActiveBeatInfo();
+    if (b && b.goal) {
+      setPanelBeat('第 ' + b.progress + ' 拍' + (b.beatTitle ? ' · ' + b.beatTitle : '') + '\n目标：' + b.goal);
+    } else {
+      setPanelBeat('（未在引导序列中）');
     }
   }
 
