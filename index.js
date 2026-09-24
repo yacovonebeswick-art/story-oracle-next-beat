@@ -4,6 +4,7 @@
 // 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁】
 // 【v3.7.1 修复：分镜判定只在拍标题里判，不再扫 goal / why】
 // 【v3.7.2 改进：选了选项即熄灭悬浮球发光提醒】
+// 【v3.7.3 新增：悬浮球里加「⏹ 终止生成」按钮】
 // ============================================================================
 
 (function () {
@@ -239,6 +240,8 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   let currentAbort = null;
   let lastRequestKey = null;
   let settingsEl = null;
+  // ★ v3.7.3 新增：本次请求是否在途（只由 requestNextBeatOptions 设 / 清）
+  let isGeneratingBeat = false;
 
   function getCtx() {
     return (typeof SillyTavern !== 'undefined' && SillyTavern.getContext)
@@ -871,6 +874,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     }
     const ctl = new AbortController();
     currentAbort = ctl;
+    // ★ v3.7.3：标记在途 + 更新悬浮球按钮态
+    isGeneratingBeat = true;
+    updateFloatStopBtn();
     const timer = setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, REQUEST_TIMEOUT_MS);
 
     const maxTokens = resolveMaxTokens();
@@ -897,6 +903,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     } finally {
       clearTimeout(timer);
       if (currentAbort === ctl) currentAbort = null;
+      // ★ v3.7.3：清在途标记 + 更新悬浮球按钮态
+      isGeneratingBeat = false;
+      updateFloatStopBtn();
     }
   }
 
@@ -1035,6 +1044,48 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     if (!floatEl) return;
     floatEl.classList.remove('so-nb-float-fresh');
     floatFresh = false;
+  }
+
+  // ==========================================================
+  // ★ v3.7.3 新增：终止本次生成
+  // ----------------------------------------------------------
+  // 从悬浮球里的「⏹ 终止生成」按钮调用。
+  // 行为：abort 当前在途的 AbortController → requestNextBeatOptions 的
+  // fetch / api.run 会抛 AbortError → 上面 catch 里走 'abort' 分支静默
+  // 收尾（不弹错误）→ finally 清 isGeneratingBeat + 按钮态。
+  // 幂等：没在生成时调用无副作用（按钮此时本来就是 disabled）。
+  // ==========================================================
+  function abortCurrentGeneration() {
+    if (!isGeneratingBeat) return;
+    try {
+      if (currentAbort) currentAbort.abort();
+    } catch (e) { /* ignore */ }
+    // 顺手清掉 busy toast（万一 requestNextBeatOptions 还没走到 finally）
+    try {
+      if (window.toastr) {
+        // toastr 没有「按文本查找」的 API，改为遍历当前所有 toast 干掉带我们标题的
+        const all = window.toastr;
+        // 直接清掉所有 toast 太重，走自定义容器那条路更稳：我们自己的 busy 用的是 toastr，
+        // 无法精确定位；不清也无所谓——requestNextBeatOptions 的 finally 里会兜底清。
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // ★ v3.7.3 新增：根据 isGeneratingBeat 亮 / 灰悬浮球里的「⏹ 终止生成」按钮。
+  // 悬浮球没建 / 卡片没展开时静默无操作。
+  function updateFloatStopBtn() {
+    if (!floatEl) return;
+    const btn = floatEl.querySelector('#so-nb-float-stop');
+    if (!btn) return;
+    if (isGeneratingBeat) {
+      btn.disabled = false;
+      btn.classList.add('so-nb-float-stop-on');
+      btn.textContent = '⏹ 终止生成';
+    } else {
+      btn.disabled = true;
+      btn.classList.remove('so-nb-float-stop-on');
+      btn.textContent = '⏹ 终止生成';
+    }
   }
 
   function labelClass(label) {
@@ -2029,6 +2080,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     floatEl = document.createElement('div');
     floatEl.id = FLOAT_ID;
     floatEl.className = 'so-nb-float-hidden so-nb-float-collapsed';
+    // ★ v3.7.3：卡片里加一颗「⏹ 终止生成」按钮，跟原有按钮并排
     floatEl.innerHTML =
       '<div class="so-nb-float-badge" title="🧭 下一拍建议（点开 / 折叠）">🧭</div>' +
       '<div class="so-nb-float-body">' +
@@ -2040,6 +2092,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
         '<div class="so-nb-float-actions">' +
           '<button type="button" class="so-next-beat-btn so-next-beat-use" id="so-nb-float-regen">生成 / 重新生成</button>' +
           '<button type="button" class="so-next-beat-btn" id="so-nb-float-jump">跳到最新候选</button>' +
+          '<button type="button" class="so-next-beat-btn so-nb-float-stop-btn" id="so-nb-float-stop" disabled title="中止本次正在进行的生成">⏹ 终止生成</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(floatEl);
@@ -2073,7 +2126,13 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       jumpToLatestChip();
     });
 
+    // ★ v3.7.3：终止生成按钮
+    floatEl.querySelector('#so-nb-float-stop').addEventListener('click', function () {
+      abortCurrentGeneration();
+    });
+
     wireFloatDrag();
+    updateFloatStopBtn();   // ★ 建卡后立刻同步一次按钮态
     return floatEl;
   }
 
