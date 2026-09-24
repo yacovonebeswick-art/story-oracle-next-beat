@@ -1,14 +1,15 @@
 // ============================================================================
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
-// v3.7.0
+// v3.7.1
 // 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁】
+// v3.7.1：新增「切拍感知」——数据层轮询 + DOM ▶ 兜底
 // ============================================================================
 
 (function () {
   'use strict';
 
   const MODULE_ID = 'story-oracle-next-beat';
-  const VERSION = '3.7.0';
+  const VERSION = '3.7.1';
   const CFG_VERSION = 15;
 
   const ORACLE_SETTINGS_KEY = 'storyOracle';
@@ -66,14 +67,9 @@
     '皮质醇', '交感神经', '内分泌紊乱', '心理防御机制', '多巴胺',
     '潜意识投射', '认知失调', '降维打击', '逻辑闭环', '精神分析',
     '创伤后应激', '神经递质', '边缘系统',
-    // ★ 氛围向（压冷冰冰，怕误伤可删）
     '面无表情', '神色淡漠', '不为所动', '波澜不惊', '无动于衷',
   ];
 
-  // 判定分镜/转场拍的关键词 —— 只在【拍标题】里判。
-  // 删掉 '同时' / '另一边'：这两个词太容易在正常拍标题里自然出现
-  //（比如「同时处理两件事」），会造成大面积误判，把普通拍当成分镜拍，
-  // 导致「我：」选项一条都不出。
   const CUT_SCENE_KEYWORDS = ['分镜', '转场', '切到', '视角切', 'B线', '支线', '分镜拍'];
 
   const DEFAULT_OPTION_TEMPLATE = `# 【选项思维链 - 代号：午夜提词器 / MBTI 八维选项专用】
@@ -237,11 +233,13 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   let currentAbort = null;
   let lastRequestKey = null;
   let settingsEl = null;
-  // 本次请求是否在途（只由 requestNextBeatOptions 设 / 清）
   let isGeneratingBeat = false;
+
   // 轮询用：上一次看到的「当前拍签名」与定时器句柄
   let lastBeatSig = null;
   let beatPollTimer = null;
+  // DOM 兜底：上一次读到的「神谕左侧 UI 高亮的拍序号」（1-based）
+  let lastDomBeatIndex = null;
 
   function getCtx() {
     return (typeof SillyTavern !== 'undefined' && SillyTavern.getContext)
@@ -309,7 +307,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       }
     } catch (e) { /* ignore */ }
     const chosen = own > 0 ? own : base;
-    return Math.max(chosen, MIN_OUTPUT_TOKENS);   // 4096 地板
+    return Math.max(chosen, MIN_OUTPUT_TOKENS);
   }
 
   function readDoneSet() {
@@ -381,47 +379,179 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   }
 
   // ==========================================================
+  // 【DOM 兜底探针】
+  // ----------------------------------------------------------
+  // 故事神谕左侧面板里，当前拍前面会有一个 ▶ 标记（已完成是 ✓）。
+  // 当数据层（getSeq / seqActiveBeat）在「用户点完成」和「生成新回复」
+  // 之间不刷新时，DOM 一定已经刷新了。于是我们从 DOM 上读它。
+  //
+  // 返回 1-based 的拍序号；读不到返回 null。
+  // 宽容匹配多种可能的选择器 / 类名 / 结构。
+  // ==========================================================
+  function readDomActiveBeatIndex() {
+    try {
+      const roots = [
+        document.querySelector('#story-oracle-panel'),
+        document.querySelector('.story-oracle-panel'),
+        document.querySelector('#so-panel'),
+        document.querySelector('.so-panel'),
+        document.body,
+      ].filter(Boolean);
+
+      const rowSelectors = [
+        '.so-beat-item',
+        '.story-oracle-beat',
+        '.so-beat-row',
+        'li',
+        'div',
+      ];
+
+      for (const root of roots) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+          acceptNode: function (n) {
+            const t = n.nodeValue;
+            if (!t) return NodeFilter.FILTER_REJECT;
+            return /[▶►▸]/.test(t) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+          },
+        });
+        let node;
+        while ((node = walker.nextNode())) {
+          let el = node.parentElement;
+          let hops = 0;
+          while (el && hops < 6) {
+            const txt = String(el.textContent || '');
+            const m = txt.match(/第\s*(\d+)\s*\/\s*\d+\s*拍/) ||
+                      txt.match(/第\s*(\d+)\s*拍/) ||
+                      txt.match(/(\d+)\s*\/\s*\d+\s*拍/) ||
+                      txt.match(/^\s*(\d+)[\.、]/m);
+            if (m) {
+              const n = Number(m[1]);
+              if (Number.isFinite(n) && n >= 1) return n;
+            }
+            el = el.parentElement;
+            hops += 1;
+          }
+        }
+
+        for (const sel of rowSelectors) {
+          const rows = root.querySelectorAll(sel + '.active, ' + sel + '.current, ' + sel + '.[data-active="true"]');
+          for (const row of rows) {
+            const txt = String(row.textContent || '');
+            const m = txt.match(/第\s*(\d+)\s*\/\s*\d+\s*拍/) ||
+                      txt.match(/第\s*(\d+)\s*拍/) ||
+                      txt.match(/(\d+)\s*\/\s*\d+\s*拍/);
+            if (m) {
+              const n = Number(m[1]);
+              if (Number.isFinite(n) && n >= 1) return n;
+            }
+          }
+        }
+      }
+    } catch (e) { /* 静默 */ }
+    return null;
+  }
+
+  // 从 DOM 上按拍序号读那行的标题/目标文本
+  function readDomBeatTextByIndex(idx) {
+    try {
+      const all = document.querySelectorAll('.so-beat-item, .story-oracle-beat, .so-beat-row, li, div');
+      for (const el of all) {
+        const t = String(el.textContent || '');
+        const m = t.match(/第\s*(\d+)\s*\/\s*\d+\s*拍/) ||
+                  t.match(/第\s*(\d+)\s*拍/) ||
+                  t.match(/^\s*(\d+)[\.、]/m);
+        if (!m) continue;
+        if (Number(m[1]) !== idx) continue;
+        const lines = t.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+        let title = '';
+        let goal = '';
+        for (const ln of lines) {
+          if (/第\s*\d+\s*\/?\s*\d*\s*拍/.test(ln)) continue;
+          if (/^[▶►▸✓✗]/.test(ln)) continue;
+          if (!title) { title = ln; continue; }
+          if (/目标[:：]/.test(ln)) { goal = ln.replace(/^.*?目标[:：]\s*/, ''); break; }
+        }
+        const gm = t.match(/目标[:：]\s*([^\n]+)/);
+        if (gm) goal = gm[1].trim();
+        return { title, goal };
+      }
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  // ==========================================================
   // 【当前拍签名】
   // ----------------------------------------------------------
   // 把「当前是哪一拍」压成一个短字符串，用于轮询比对。
-  // 组成：聊天键 + 拍序号 + 总拍数 + 拍标题 + 本拍目标。
-  // 任一变化（换聊天 / 切拍 / 改标题 / 改目标）都会得到不同签名。
-  // 不在引导序列中时返回 ''，与「有拍」区分开。
+  // v3.7.1 起，签名里除了数据层，还补了 DOM ▶ 序号 —— 这样即使
+  // 神谕数据层在「点完成」和「生成」之间不刷新，DOM 变了也能触发。
   // ==========================================================
   function currentBeatSignature() {
     const info = getActiveBeatInfo();
-    if (!info) return '';
+    const domIdx = readDomActiveBeatIndex();
+    if (!info && domIdx == null) return '';
     return [
       chatKey(),
-      info.cursor,
-      info.total,
-      info.beatTitle,
-      info.goal,
+      info ? info.cursor : '',
+      info ? info.total : '',
+      info ? info.beatTitle : '',
+      info ? info.goal : '',
+      domIdx == null ? '' : domIdx,
     ].join('\u0001');
+  }
+
+  // ==========================================================
+  // 【DOM ↔ 数据层对账】
+  // ----------------------------------------------------------
+  // 如果 getActiveBeatInfo() 读到的拍和神谕左侧 DOM ▶ 序号不一致，
+  // 以 DOM 为准，直接在面板上把「当前拍」文案改过来。
+  // ==========================================================
+  function reconcilePanelWithDom() {
+    if (!panelEl || !panelEl.isConnected) return;
+    const domIdx = readDomActiveBeatIndex();
+    if (domIdx == null) return;
+
+    const info = getActiveBeatInfo();
+    const dataIdx = info ? (info.cursor + 1) : null;
+
+    if (dataIdx === domIdx) return;
+
+    const host = panelEl.querySelector('#so-nb-panel-beat');
+    if (!host) return;
+
+    const domText = readDomBeatTextByIndex(domIdx);
+
+    let line = '第 ' + domIdx + (info && info.total ? ' / ' + info.total : '') + ' 拍';
+    if (domText && domText.title) line += ' · ' + domText.title;
+    if (domText && domText.goal) line += '\n目标：' + domText.goal;
+    host.textContent = line;
   }
 
   // ==========================================================
   // 【拍变化轮询】
   // ----------------------------------------------------------
-  // 每 1 秒跑一次：当前拍签名与上次不同 → 认为切拍了。
-  // 切拍时要做的事：
-  //   1. 记下新签名；
-  //   2. 刷新面板（当前拍展示）；
-  //   3. 重挂已有候选（若上一拍留下的 chip 还挂在楼层上，
-  //      重挂会按 lastByChat 里的记录恢复，避免拍切了还显示旧候选）。
-  //   4. 顺带刷新一次悬浮球状态文案。
+  // 每 1 秒跑一次：签名变了 → 刷新面板 / 重挂 chip / 刷新悬浮球，
+  // 并且做一次 DOM ↔ 数据层对账。
   // 幂等：签名没变时什么都不做。
   // ==========================================================
   function checkBeatChanged() {
-    const sig = currentBeatSignature();
+    let sig;
+    try {
+      sig = currentBeatSignature();
+    } catch (e) {
+      console.error('[next-beat] currentBeatSignature 挂了：', e);
+      return;
+    }
     if (sig === lastBeatSig) return;
     lastBeatSig = sig;
+
     try {
       updatePanel();
+      reconcilePanelWithDom();
       refreshChips();
       updateFloatStatus();
     } catch (e) {
-      console.warn('[next-beat] 切拍刷新失败：', e);
+      console.error('[next-beat] 切拍刷新失败：', e);
     }
   }
 
@@ -561,9 +691,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     '吕子乔：他靠在墙边，抱着胳膊没说话。\n' +
     '时间：半小时后，天色完全暗了下来。';
 
-  // ==========================================================
-  // 【导演锁】清洗函数：拦截 AI 返回的文本，强制清除违禁词
-  // ==========================================================
   function sanitizeDirectorLock(text) {
     let cleaned = String(text || '');
     for (const word of BANNED_WORDS) {
@@ -573,19 +700,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return cleaned;
   }
 
-  // ==========================================================
-  // 【分镜判断】判断当前拍是不是分镜/转场拍
-  // ----------------------------------------------------------
-  // 只在【拍标题】里判分镜。
-  // 之前扫的是 goal + beatTitle + why，误伤面太大——
-  // goal / why 是自然语言描述，用户/神谕顺口写「补足缺失的转场」
-  // 「同时推进两条线」这类句子时，会被误判成分镜拍，
-  // 导致整拍「我：」选项一条都不出。
-  // 现在：只有拍标题里明确带「分镜 / 转场 / 切到 / 视角切 / B线 / 支线 / 分镜拍」
-  // 才算分镜拍。标题是给这一拍起的名字，用它判更可靠。
-  // 如果某拍真是分镜但标题没写，那是大纲不规范——宁可漏判一次，
-  // 也不要大面积误判（误判的代价是这一拍完全没法推进）。
-  // ==========================================================
   function isCutSceneBeat(beatInfo) {
     if (!beatInfo) return false;
     const title = String(beatInfo.beatTitle || '');
@@ -601,13 +715,10 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
 
     const parts = [];
 
-    // ★★★ 导演锁注入（最前） ★★★
     const ctx = getCtx();
     const userName = ctx ? (ctx.name1 || 'User') : 'User';
     parts.push(DIRECTOR_LOCK.replace(/\{\{user\}\}/g, userName));
-    // ★★★★★★★★★★★★★★★★★★★★★★
 
-    // ★★★ 分镜拍判断与强制配比注入 ★★★
     const isCutScene = isCutSceneBeat(beatInfo);
 
     if (beatInfo && beatInfo.goal) {
@@ -637,7 +748,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     parts.push('"""');
     parts.push('');
 
-    // ★★★ 接续自检（情境版 · 硬约束）—— 逼模型从上一拍末尾出发 ★★★
     parts.push('【接续自检 —— 生成候选前，必须先在脑内做这一步】');
     parts.push('');
     parts.push('⚠ 核心认知：上面的【本拍目标】，描述的是"这一拍要走向的结果"，');
@@ -666,9 +776,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     parts.push('【再次强调】"补中间那一步"不是可选项，是硬性要求——');
     parts.push('只要你判定正文末尾与本拍目标【不在同一瞬间】，候选里就必须至少有一条是"过渡选项"。');
     parts.push('');
-    // ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
-    // ★★★ 氛围温度锁：正文后追加提醒（首尾夹击） ★★★
     parts.push('【⚠️ 氛围温度提醒（适用于所有场景，不针对特定剧情）】');
     parts.push('刚发生的这段正文无论是什么内容，你给的选项都不许冷冰冰。');
     parts.push('每条候选都要有“人味”——至少带一句台词、一个语气词、一个停顿、一个迟疑、');
@@ -676,7 +784,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     parts.push('禁止把有温度的场面写成事发现场笔录，禁止只用流程动作代替人物反应。');
     parts.push('人物的反应要和刚发生的事重量对等：刚经历强烈的事，不能立刻切成冷静的流程。');
     parts.push('');
-    // ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
     if (isCutScene) {
       parts.push('请严格生成 2~4 条「角色名：」和 1 条「时间：」，绝对不要生成任何「我：」条目。');
@@ -715,7 +822,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return parts.join('\n');
   }
 
-  // 破甲（破限 / 越狱）
   const ORACLE_JB_KEYS = [
     'jailbreakPrompt', 'jailbreakText', 'customJailbreak', 'jbText',
     'builtinJailbreakText', 'systemPromptJailbreak',
@@ -777,9 +883,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return [{ role: 'system', content: text }, ...inner];
   }
 
-  // ---------------------------------------------------------------------------
-  // 解析候选
-  // ---------------------------------------------------------------------------
   function isJunkLine(line) {
     const t = String(line || '').trim();
     if (!t) return true;
@@ -806,29 +909,22 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return false;
   }
 
-  // 从「标签：内容」里抠出标签；宽容处理 **加粗** / 空格 / 【xxx】方括号 / 全半角冒号。
-  // 返回标签字符串（已去掉包装）；认不出返回 ''。
   function extractLabel(line) {
     if (!line) return '';
     let s = String(line).trim();
-    // 剥掉 markdown 项目符号 / 编号（"- " / "* " / "A. " / "1) " 等），只针对行首
     s = s.replace(/^(?:[-*•·]|\d{1,2}[\.\)、）]|[A-Za-z][\.\)])\s+/, '');
-    // 剥掉 **加粗** 包裹
     s = s.replace(/^\*\*(.+?)\*\*/, '$1');
-    // 允许 【xxx】 / 〔xxx〕 这类括号包裹
     s = s.replace(/^[【〔\[](.+?)[】〕\]]/, '$1');
-    // 标签与冒号之间允许空格；冒号可以是全角或半角
     const m = s.match(/^([^：:]{1,16})\s*[：:]/);
     if (!m) return '';
     const label = m[1].trim();
     if (!label) return '';
-    if (/\s/.test(label)) return '';          // 标签内不能有空格
-    if (label.length > 12) return '';          // 过长视为普通正文
-    if (/[。！？，、；]/.test(label)) return ''; // 含句子标点视为正文
+    if (/\s/.test(label)) return '';
+    if (label.length > 12) return '';
+    if (/[。！？，、；]/.test(label)) return '';
     return label;
   }
 
-  // 优先解析「标签：内容」行（中英文冒号都吃，允许 **加粗** / 【xxx】/ 编号前缀）。
   function parseLabeledLines(src) {
     const out = [];
     for (const line of src.split(/\r?\n/)) {
@@ -838,7 +934,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       const label = extractLabel(t);
       if (!label) continue;
       if (!isLegalLabel(label)) continue;
-      // 抠出冒号之后的内容
       const cm = t.match(/[：:]\s*(.+)$/);
       if (!cm) continue;
       const content = cm[1].trim();
@@ -851,11 +946,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   function parseOptions(text) {
     const src = String(text || '');
 
-    // ① 优先：「标签：内容」
     const labeled = parseLabeledLines(src);
     if (labeled.length) return dedupOptions(labeled);
 
-    // ② 兼容：**标签** 内容
     const out = [];
     const reLabeled = /^\s*\*\*([^*\n]+?)\*\*\s+(.+?)\s*$/;
     for (const line of src.split(/\r?\n/)) {
@@ -870,8 +963,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     }
     if (out.length) return dedupOptions(out);
 
-    // ③ 兜底：A. / 1. / - 这类纯编号行
-    //    ⚠ 修复点：如果内容本身是「角色名：xxx」，就把角色名提成标签，而不是一律标「选项」。
     const rePlain = /^\s*(?:([A-Za-z]|\d{1,2})[\.\)、）\s]|[-*•·])\s*(.+?)\s*$/;
     for (const line of src.split(/\r?\n/)) {
       if (isJunkLine(line)) continue;
@@ -919,7 +1010,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     }
     const ctl = new AbortController();
     currentAbort = ctl;
-    // 标记在途 + 更新悬浮球按钮态
     isGeneratingBeat = true;
     updateFloatStopBtn();
     const timer = setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, REQUEST_TIMEOUT_MS);
@@ -942,13 +1032,11 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
         text = await sendWithOwnConnection(messages, maxTokens, s, ctl.signal);
       }
       text = String(text || '').trim();
-      // 导演锁清洗（防装逼）
       text = sanitizeDirectorLock(text);
       return parseOptions(text);
     } finally {
       clearTimeout(timer);
       if (currentAbort === ctl) currentAbort = null;
-      // 清在途标记 + 更新悬浮球按钮态
       isGeneratingBeat = false;
       updateFloatStopBtn();
     }
@@ -1071,35 +1159,16 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     el.value = String(text == null ? '' : text);
     el.dispatchEvent(new Event('input', { bubbles: true }));
     try { el.focus(); } catch (e) { /* ignore */ }
-    // 用户选了某条选项 → 提醒已完成使命，熄灭悬浮球的光
     clearFloatFresh();
     return true;
   }
 
-  // ==========================================================
-  // 【悬浮球发光提醒】熄灭入口
-  // ----------------------------------------------------------
-  // 触发时机：用户点了任意一条候选（经 fillInput 填进输入框）。
-  // 这是「已经注意到并使用了」的最直接信号 —— 光可以灭了。
-  // 幂等：悬浮球没建 / 没亮时调用无副作用。
-  // 注意：setFloatCollapsed 里还保留了一条「折叠时清光」的老路径，
-  // 两条路都能灭，互不冲突。
-  // ==========================================================
   function clearFloatFresh() {
     if (!floatEl) return;
     floatEl.classList.remove('so-nb-float-fresh');
     floatFresh = false;
   }
 
-  // ==========================================================
-  // 【终止生成】中止当前在途请求
-  // ----------------------------------------------------------
-  // 从悬浮球里的「⏹ 终止生成」按钮调用。
-  // 行为：abort 当前在途的 AbortController → requestNextBeatOptions 的
-  // fetch / api.run 会抛 AbortError → 上面 catch 里走 'abort' 分支静默
-  // 收尾（不弹错误）→ finally 清 isGeneratingBeat + 按钮态。
-  // 幂等：没在生成时调用无副作用（按钮此时本来就是 disabled）。
-  // ==========================================================
   function abortCurrentGeneration() {
     if (!isGeneratingBeat) return;
     try {
@@ -1107,8 +1176,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     } catch (e) { /* ignore */ }
   }
 
-  // 根据 isGeneratingBeat 亮 / 灰悬浮球里的「⏹ 终止生成」按钮。
-  // 悬浮球没建 / 卡片没展开时静默无操作。
   function updateFloatStopBtn() {
     if (!floatEl) return;
     const btn = floatEl.querySelector('#so-nb-float-stop');
@@ -1130,9 +1197,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return 'so-nb-lbl-role';
   }
 
-  // 填入输入框时的前缀规则 ——
-  //   我 / 时间 → 不带前缀（原文即自然形式）；
-  //   其它标签（角色名 / 角色A / 选项）→ 带「标签：」前缀。
   function formatOptionForInput(opt) {
     const label = String((opt && opt.label) || '').trim();
     const content = String((opt && opt.content) || '').trim();
@@ -2161,13 +2225,12 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       jumpToLatestChip();
     });
 
-    // 终止生成按钮
     floatEl.querySelector('#so-nb-float-stop').addEventListener('click', function () {
       abortCurrentGeneration();
     });
 
     wireFloatDrag();
-    updateFloatStopBtn();   // 建卡后立刻同步一次按钮态
+    updateFloatStopBtn();
     return floatEl;
   }
 
@@ -2456,7 +2519,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       if (beatPollTimer) clearInterval(beatPollTimer);
       beatPollTimer = setInterval(checkBeatChanged, 1000);
 
-      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 强化版）');
+      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 + 切拍感知）');
     });
   });
 })();
