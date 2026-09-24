@@ -239,6 +239,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   let settingsEl = null;
   // 本次请求是否在途（只由 requestNextBeatOptions 设 / 清）
   let isGeneratingBeat = false;
+  // 轮询用：上一次看到的「当前拍签名」与定时器句柄
+  let lastBeatSig = null;
+  let beatPollTimer = null;
 
   function getCtx() {
     return (typeof SillyTavern !== 'undefined' && SillyTavern.getContext)
@@ -375,6 +378,51 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       seed: String(beat.seed || ''),
       why: String(beat.why || ''),
     };
+  }
+
+  // ==========================================================
+  // 【当前拍签名】
+  // ----------------------------------------------------------
+  // 把「当前是哪一拍」压成一个短字符串，用于轮询比对。
+  // 组成：聊天键 + 拍序号 + 总拍数 + 拍标题 + 本拍目标。
+  // 任一变化（换聊天 / 切拍 / 改标题 / 改目标）都会得到不同签名。
+  // 不在引导序列中时返回 ''，与「有拍」区分开。
+  // ==========================================================
+  function currentBeatSignature() {
+    const info = getActiveBeatInfo();
+    if (!info) return '';
+    return [
+      chatKey(),
+      info.cursor,
+      info.total,
+      info.beatTitle,
+      info.goal,
+    ].join('\u0001');
+  }
+
+  // ==========================================================
+  // 【拍变化轮询】
+  // ----------------------------------------------------------
+  // 每 1 秒跑一次：当前拍签名与上次不同 → 认为切拍了。
+  // 切拍时要做的事：
+  //   1. 记下新签名；
+  //   2. 刷新面板（当前拍展示）；
+  //   3. 重挂已有候选（若上一拍留下的 chip 还挂在楼层上，
+  //      重挂会按 lastByChat 里的记录恢复，避免拍切了还显示旧候选）。
+  //   4. 顺带刷新一次悬浮球状态文案。
+  // 幂等：签名没变时什么都不做。
+  // ==========================================================
+  function checkBeatChanged() {
+    const sig = currentBeatSignature();
+    if (sig === lastBeatSig) return;
+    lastBeatSig = sig;
+    try {
+      updatePanel();
+      refreshChips();
+      updateFloatStatus();
+    } catch (e) {
+      console.warn('[next-beat] 切拍刷新失败：', e);
+    }
   }
 
   function extractHttpStatus(err) {
@@ -2402,6 +2450,12 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       watchWandMenu();
       refreshChips();
       applyFloatVisibility();
+
+      // 启动「切拍」轮询：每秒比对一次当前拍签名
+      lastBeatSig = currentBeatSignature();
+      if (beatPollTimer) clearInterval(beatPollTimer);
+      beatPollTimer = setInterval(checkBeatChanged, 1000);
+
       console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 强化版）');
     });
   });
