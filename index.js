@@ -2,9 +2,6 @@
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
 // v3.7.0
 // 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁】
-// 【v3.7.1 修复：分镜判定只在拍标题里判，不再扫 goal / why】
-// 【v3.7.2 改进：选了选项即熄灭悬浮球发光提醒】
-// 【v3.7.3 新增：悬浮球里加「⏹ 终止生成」按钮】
 // ============================================================================
 
 (function () {
@@ -240,7 +237,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   let currentAbort = null;
   let lastRequestKey = null;
   let settingsEl = null;
-  // ★ v3.7.3 新增：本次请求是否在途（只由 requestNextBeatOptions 设 / 清）
+  // 本次请求是否在途（只由 requestNextBeatOptions 设 / 清）
   let isGeneratingBeat = false;
 
   function getCtx() {
@@ -531,11 +528,11 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   // ==========================================================
   // 【分镜判断】判断当前拍是不是分镜/转场拍
   // ----------------------------------------------------------
-  // v3.7.1 修复：只在【拍标题】里判分镜。
+  // 只在【拍标题】里判分镜。
   // 之前扫的是 goal + beatTitle + why，误伤面太大——
   // goal / why 是自然语言描述，用户/神谕顺口写「补足缺失的转场」
   // 「同时推进两条线」这类句子时，会被误判成分镜拍，
-  // 导致整拍「我：」选项一条都不出（三次生成全中的那个 bug）。
+  // 导致整拍「我：」选项一条都不出。
   // 现在：只有拍标题里明确带「分镜 / 转场 / 切到 / 视角切 / B线 / 支线 / 分镜拍」
   // 才算分镜拍。标题是给这一拍起的名字，用它判更可靠。
   // 如果某拍真是分镜但标题没写，那是大纲不规范——宁可漏判一次，
@@ -874,7 +871,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     }
     const ctl = new AbortController();
     currentAbort = ctl;
-    // ★ v3.7.3：标记在途 + 更新悬浮球按钮态
+    // 标记在途 + 更新悬浮球按钮态
     isGeneratingBeat = true;
     updateFloatStopBtn();
     const timer = setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, REQUEST_TIMEOUT_MS);
@@ -903,7 +900,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     } finally {
       clearTimeout(timer);
       if (currentAbort === ctl) currentAbort = null;
-      // ★ v3.7.3：清在途标记 + 更新悬浮球按钮态
+      // 清在途标记 + 更新悬浮球按钮态
       isGeneratingBeat = false;
       updateFloatStopBtn();
     }
@@ -1047,7 +1044,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   }
 
   // ==========================================================
-  // ★ v3.7.3 新增：终止本次生成
+  // 【终止生成】中止当前在途请求
   // ----------------------------------------------------------
   // 从悬浮球里的「⏹ 终止生成」按钮调用。
   // 行为：abort 当前在途的 AbortController → requestNextBeatOptions 的
@@ -1060,18 +1057,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     try {
       if (currentAbort) currentAbort.abort();
     } catch (e) { /* ignore */ }
-    // 顺手清掉 busy toast（万一 requestNextBeatOptions 还没走到 finally）
-    try {
-      if (window.toastr) {
-        // toastr 没有「按文本查找」的 API，改为遍历当前所有 toast 干掉带我们标题的
-        const all = window.toastr;
-        // 直接清掉所有 toast 太重，走自定义容器那条路更稳：我们自己的 busy 用的是 toastr，
-        // 无法精确定位；不清也无所谓——requestNextBeatOptions 的 finally 里会兜底清。
-      }
-    } catch (e) { /* ignore */ }
   }
 
-  // ★ v3.7.3 新增：根据 isGeneratingBeat 亮 / 灰悬浮球里的「⏹ 终止生成」按钮。
+  // 根据 isGeneratingBeat 亮 / 灰悬浮球里的「⏹ 终止生成」按钮。
   // 悬浮球没建 / 卡片没展开时静默无操作。
   function updateFloatStopBtn() {
     if (!floatEl) return;
@@ -2080,7 +2068,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     floatEl = document.createElement('div');
     floatEl.id = FLOAT_ID;
     floatEl.className = 'so-nb-float-hidden so-nb-float-collapsed';
-    // ★ v3.7.3：卡片里加一颗「⏹ 终止生成」按钮，跟原有按钮并排
     floatEl.innerHTML =
       '<div class="so-nb-float-badge" title="🧭 下一拍建议（点开 / 折叠）">🧭</div>' +
       '<div class="so-nb-float-body">' +
@@ -2126,13 +2113,13 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       jumpToLatestChip();
     });
 
-    // ★ v3.7.3：终止生成按钮
+    // 终止生成按钮
     floatEl.querySelector('#so-nb-float-stop').addEventListener('click', function () {
       abortCurrentGeneration();
     });
 
     wireFloatDrag();
-    updateFloatStopBtn();   // ★ 建卡后立刻同步一次按钮态
+    updateFloatStopBtn();   // 建卡后立刻同步一次按钮态
     return floatEl;
   }
 
@@ -2334,7 +2321,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
         '<b>🧭 下一拍建议（配套故事神谕，独立扩展 v' + VERSION + '）</b>' +
         '<div class="inline-drawer-icon fa-solid fa-circle-chevron-down ui-widget-content"></div>' +
       '</div>' +
-      '<div class="inline-drawer-content" style="display:none;">' +
+      '<div class="inline-drawer-content">' +
         '<label class="checkbox_label">' +
           '<input id="so_next_beat_enabled" type="checkbox">' +
           '每条新回复自动生成（默认关；手动点更省 API）' +
@@ -2357,16 +2344,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       '</div>';
     container.appendChild(div);
     syncSettingsUI();
-
-    const toggle = div.querySelector('.inline-drawer-toggle');
-    const content = div.querySelector('.inline-drawer-content');
-    if (toggle && content) {
-      toggle.addEventListener('click', function () {
-        const opened = content.style.display !== 'none';
-        content.style.display = opened ? 'none' : '';
-        toggle.classList.toggle('open', !opened);
-      });
-    }
 
     function bindToggle(id, key) {
       const el = document.getElementById(id);
