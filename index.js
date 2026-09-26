@@ -2,7 +2,7 @@
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
 // v3.7.1
 // 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁 + 世界书召回 + 人设推演】
-// ★ 本次新增：人设不跨卡残留（换卡 / 换存档 / 换聊天时 User 人设框自动清空）
+// ★ 本次新增：User 人设按存档分开存（换卡 / 换存档 / 换聊天时各归各，切回来仍在）
 // ============================================================================
 
 (function () {
@@ -230,10 +230,11 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     jailbreakMode: 'inherit',
     jailbreakText: '',
     maxOutputTokens: 0,
+    // ★ 当前生效的 User 人设（喂 prompt 时读这个；由下面按存档切换/写回维护）
     userPersonaText: '',
-    // ★ 新增：记录"这个聊天/这张卡"上一次用的 user 人设所属的身份键，
-    //   用来判断是否发生了换卡 / 换存档 / 换聊天 → 触发清空。
-    userPersonaTextCardKey: '',
+    // ★ 人设按【存档身份】分开存：{ "c:3||阿岚-2026": "人设文本", "g:12": "..." }
+    //   切换聊天 / 存档 / 卡时，人设框按当前身份从这张表读回自己那份——切回来还在。
+    userPersonaByChat: {},
   };
 
   const MIN_OUTPUT_TOKENS = 4096;
@@ -284,21 +285,27 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     if (s.jailbreakText === undefined) s.jailbreakText = '';
     if (s.maxOutputTokens === undefined) s.maxOutputTokens = 0;
     if (s.userPersonaText === undefined) s.userPersonaText = '';
-    // ★ 新增键的默认由下方 Object.assign(DEFAULTS, …) 兜底；此处不显式设置，
-    //   以免将来换默认值时被这里的硬编码覆盖。
+    // ★ 老存档迁移：把原来那唯一一份人设，归到"当前这张卡 / 这份存档"名下。
+    if (!s.userPersonaByChat || typeof s.userPersonaByChat !== 'object') {
+      s.userPersonaByChat = {};
+      const key = personaCardKey();
+      if (key && String(s.userPersonaText || '').trim()) {
+        s.userPersonaByChat[key] = String(s.userPersonaText);
+      }
+    }
     s._v = CFG_VERSION;
     saveSettings();
     console.log('[next-beat] 已迁移设置到 v' + CFG_VERSION);
   }
 
   // ==========================================================
-  // 【人设不跨卡残留】—— 换卡 / 换存档 / 换聊天时自动清空 User 人设框
+  // 【人设不跨卡残留 · 按存档分开存】—— 每份存档保存自己的人设，切换时各归各的
   // ----------------------------------------------------------
   // 身份键 = 群聊走 groupId；单聊走 characterId + chatId。
-  //   · 换角色卡        → characterId 变        → 键变 → 清空
-  //   · 同一卡换存档    → chatId 变             → 键变 → 清空
-  //   · 切群聊          → groupId 变            → 键变 → 清空
-  //   · 同聊天内刷新    → 键不变                → 保留
+  //   · 换角色卡        → characterId 变        → 换用另一份人设
+  //   · 同一卡换存档    → chatId 变             → 换用另一份人设
+  //   · 切群聊          → groupId 变            → 换用另一份人设
+  //   · 切回原存档      → 键复原                → 原来那份人设仍在
   // 只影响插件自己的 userPersonaText，不碰 ST 的 Persona，不碰神谕本体。
   // ==========================================================
 
@@ -316,22 +323,41 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     }
   }
 
-  // 若卡/聊天身份与上次记录的不一致：清空 userPersonaText 并返回 true（表示确实清了）。
-  // 幂等：同一张卡内重复调用无副作用。传 s 时必须是一个可写的设置对象。
-  function maybeClearUserPersona(s) {
-    if (!s) return false;
+  // 把 userPersonaText（当前生效值）按当前身份【写回】映射表。
+  // 在输入框每次改动 / 切换聊天前调用，保证"这份存档的人设"被记住。
+  function stashUserPersona(s) {
+    if (!s || typeof s !== 'object') return;
+    if (!s.userPersonaByChat || typeof s.userPersonaByChat !== 'object') s.userPersonaByChat = {};
     const key = personaCardKey();
-    if (!key) return false;
-    if (s.userPersonaTextCardKey === key) return false;   // 同一身份 → 不动
-    s.userPersonaTextCardKey = key;                        // 先记新身份
-    if (String(s.userPersonaText || '').trim()) {
-      s.userPersonaText = '';                              // 有残留才清，避免多余写盘
-      return true;
-    }
-    return false;
+    if (!key) return;
+    const text = String(s.userPersonaText || '');
+    if (text.trim()) s.userPersonaByChat[key] = text;
+    else delete s.userPersonaByChat[key];   // 清空 = 这份存档不再记录，保持表干净
   }
 
-  // 把设置面板里的 User 人设输入框与当前设置同步（面板没开就静默跳过）。
+  // 把 userPersonaText（当前生效值）按【指定身份键】写回映射表（用于"切走前"归位旧存档）。
+  function stashUserPersonaForKey(s, key) {
+    if (!s || typeof s !== 'object' || !key) return;
+    if (!s.userPersonaByChat || typeof s.userPersonaByChat !== 'object') s.userPersonaByChat = {};
+    const text = String(s.userPersonaText || '');
+    if (text.trim()) s.userPersonaByChat[key] = text;
+    else delete s.userPersonaByChat[key];
+  }
+
+  // 按当前身份从映射表【读回】对应那份人设，填入 userPersonaText（当前生效值）。
+  // 返回 true 表示值发生了变化（需要同步 UI / 落盘）。
+  function loadUserPersonaForChat(s) {
+    if (!s || typeof s !== 'object') return false;
+    if (!s.userPersonaByChat || typeof s.userPersonaByChat !== 'object') s.userPersonaByChat = {};
+    const key = personaCardKey();
+    if (!key) return false;
+    const want = String(s.userPersonaByChat[key] || '');
+    if (String(s.userPersonaText || '') === want) return false;
+    s.userPersonaText = want;
+    return true;
+  }
+
+  // 把设置面板里的 User 人设输入框与当前生效值同步（面板没开就静默跳过）。
   function syncPersonaInput() {
     try {
       const el = document.querySelector('#so-nb-set-persona');
@@ -349,8 +375,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     );
     const s = ctx.extensionSettings[MODULE_ID];
     migrateSettings(s);
-    // ★ 人设不跨卡残留：只要读设置就顺手校验一次身份（同卡零开销、幂等）
-    if (maybeClearUserPersona(s)) {
+    // ★ 人设按存档分开存：每次读设置都按当前身份把对应那份读回 userPersonaText。
+    //   同一存档内是幂等空操作；换档 / 换卡时就把"那一份"换进来了。
+    if (loadUserPersonaForChat(s)) {
       saveSettings();
       syncPersonaInput();
     }
@@ -1792,6 +1819,12 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     renderSettingsModelSelect();
   }
   function closeSettings() {
+    // ★ 人设按存档分开存：关闭前把当前输入框内容归位到本存档，保证不丢。
+    try {
+      const st = loadSettings();
+      stashUserPersona(st);
+      saveSettings();
+    } catch (e) { /* ignore */ }
     if (settingsEl) settingsEl.classList.remove('so-nb-set-show');
   }
 
@@ -1877,8 +1910,8 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
               '在这里填 <b>本张卡里 user 是谁</b>：身份 / 性格 / 说话方式 / 此刻情绪 / 已知与未知。' +
               '每次生成选项时，这段会作为【最高优先级人设约束】拼进 prompt，' +
               '让选项符合这张卡的 user，而不是通用玩家。<br>' +
-              '<b>换卡 / 换存档 / 换聊天时这里会自动清空</b>——避免上一张卡的人设串到下一张卡上；' +
-              '同一张卡里反复生成不会丢。换卡后记得重新填一次。' +
+              '<b>人设按「存档」分开保存</b>：每张卡 / 每个存档都有自己的一份；' +
+              '切到别的卡 / 别的存档会换成那一份，<b>切回来时原来这份还在</b>。' +
             '</p>' +
             '<textarea id="so-nb-set-persona" rows="10" placeholder="例：\n姓名：李烨真\n身份：高中老师，教语文\n性格：表面温和，心里记仇；不爱主动，但被逼到墙角会立刻翻脸\n说话方式：短句，偶尔带一句古诗；不爆粗\n此刻：刚发现学生作弊，还没决定要不要拆穿\n已知：学生以为他不知道；不知道学生已经通知了家长\n不知道：家长今晚会来学校">' + escapeText(s.userPersonaText) + '</textarea>' +
           '</div>' +
@@ -2026,7 +2059,15 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     bindInput('#so-nb-set-endpoint', 'connEndpoint');
     bindInput('#so-nb-set-apikey', 'connApiKey');
     bindInput('#so-nb-set-tpl', 'customOptionTemplate');
-    bindInput('#so-nb-set-persona', 'userPersonaText');
+
+    // ★ User 人设：改动时同时写进「当前身份」的映射条目（切档 / 换卡时按身份各读各的）。
+    const personaEl = settingsEl.querySelector('#so-nb-set-persona');
+    personaEl.addEventListener('input', function () {
+      const st = loadSettings();
+      st.userPersonaText = this.value;
+      stashUserPersona(st);        // ★ 写回本存档那份
+      saveSettings();
+    });
 
     settingsEl.querySelector('#so-nb-set-jb-mode').addEventListener('change', function () {
       const st = loadSettings();
@@ -2541,30 +2582,14 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       setTimeout(rehangChips, 100);
       updatePanel();
       applyFloatVisibility();
-      // ★ 人设不跨卡残留：换聊天 / 换存档 / 换卡时清空 User 人设框
-      //   （loadSettings 内部已含 maybeClearUserPersona；这里再显式同步一次输入框与提示）
+      // ★ 人设按存档分开存：旧档那份在用户输入时就已写回（stashUserPersona），
+      //   这里只需按新身份把新档那份读回输入框——切回来时原样还在。
       try {
-        const s = loadSettings();     // 会触发清理
+        const s = loadSettings();   // 内部 loadUserPersonaForChat 已把 userPersonaText 换成新档那份
         syncPersonaInput();
-        // 若刚才真的清了：给用户一个温和提示（同一张卡内刷新不会走到这里）
-        if (!String(s.userPersonaText || '').trim()) {
-          const hadKey = s.userPersonaTextCardKey;
-          if (hadKey) {
-            // 无法区分「本来就没填」与「刚被清空」，故仅在确有提示需求时弹；
-            // 为避免误报，只在设置了面板正开着时才提示（面板开着 = 用户正关注这块）
-            const pe = document.querySelector('#so-nb-set-persona');
-            const panelOpen = pe && settingsEl && settingsEl.classList.contains('so-nb-set-show');
-            if (panelOpen && window.toastr && window.toastr.info) {
-              window.toastr.info(
-                '已切换聊天 / 角色卡，User 人设已自动清空（避免跨卡残留）。',
-                '🧭 下一拍建议',
-                { timeOut: 4000, extendedTimeOut: 2000 }
-              );
-            }
-          }
-        }
+        void s;
       } catch (e) {
-        console.warn('[next-beat] 换卡清理 User 人设时出错：', e);
+        console.warn('[next-beat] 换档读取 User 人设失败：', e);
       }
     });
   }
@@ -2652,7 +2677,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
         '</label>' +
         '<p style="opacity:0.7; font-size:0.85em;">' +
           '连接 / 模板 / 破甲 / 输出上限 / User 人设 / 提示词 / 上下文上限都在 🧭 面板里的 ⛭ 设置中。' +
-          '<br><b>User 人设在换卡 / 换存档 / 换聊天时会自动清空</b>，避免跨卡残留。' +
+          '<br><b>User 人设按存档分开保存</b>：换卡 / 换存档会切到那一份，切回来还在。' +
         '</p>' +
       '</div>';
     container.appendChild(div);
@@ -2715,7 +2740,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       watchWandMenu();
       refreshChips();
       applyFloatVisibility();
-      // ★ 首次载入：也校验一次（覆盖"打开酒馆时已在某张卡"的场景——避免上次卡的人设残留）。
+      // ★ 首次载入：按当前身份把对应那份人设读回（覆盖"打开酒馆时已在某张卡"的场景）。
       try {
         const s = loadSettings();
         syncPersonaInput();
@@ -2726,7 +2751,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       if (beatPollTimer) clearInterval(beatPollTimer);
       beatPollTimer = setInterval(checkBeatChanged, 1000);
 
-      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 + 世界书召回 + 人设推演 + 切拍感知 + 人设不跨卡残留）');
+      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 + 世界书召回 + 人设推演 + 切拍感知 + 人设按存档分开存）');
     });
   });
 })();
