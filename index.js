@@ -1,7 +1,7 @@
 // ============================================================================
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
 // v3.7.1
-// 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁 + 世界书召回】
+// 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁 + 世界书召回 + 人设推演】
 // ============================================================================
 
 (function () {
@@ -95,6 +95,19 @@
 - 上一段的**末句情绪**是：___（冷 / 紧 / 曖 / 对峙 / 微乱 / 寻常 / 疲惫……）
 - 所有选项**都必须紧接着那一口气往下走**，不跳时间、不跳场、不脱离当下气氛。
 - 检查：玩家拿这条指令发出去，正文模型第一段能不能立刻接上？接不上就重写。
+
+## Vol.1.5 人设推演（开写前必做，不许跳过）
+
+在写任何一条选项之前，先做这一步——不写进输出，只在脑内推：
+
+1. **逐个列出本轮在场角色**（包括 user 自己）。
+2. **对每一个角色，各填三格：**
+   - **他是谁**：身份 / 性格 / 此刻情绪 / 他知道什么、不知道什么。
+   - **他此刻会做什么**：以他的性格，面对上一段末尾那件事，最可能的第一反应是什么？
+   - **他此刻会说什么**：以他的说话方式，会怎么开口？用词是什么风格？
+3. **选项直接从那三格里挑**——写"这个角色会做的"，不写"一般人会做的"。
+
+**判断标准：** 熟人看到会说"对，就是他"→过关；换个名字也成立、看不出是谁→重写。
 
 ## Vol.2 信息边界——本提示词最硬的一节
 在写任何一条选项之前，逐项确认：
@@ -216,6 +229,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     jailbreakMode: 'inherit',
     jailbreakText: '',
     maxOutputTokens: 0,
+    userPersonaText: '',
   };
 
   const MIN_OUTPUT_TOKENS = 4096;
@@ -265,6 +279,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     if (s.jailbreakMode === undefined) s.jailbreakMode = 'inherit';
     if (s.jailbreakText === undefined) s.jailbreakText = '';
     if (s.maxOutputTokens === undefined) s.maxOutputTokens = 0;
+    if (s.userPersonaText === undefined) s.userPersonaText = '';
     s._v = CFG_VERSION;
     saveSettings();
     console.log('[next-beat] 已迁移设置到 v' + CFG_VERSION);
@@ -751,6 +766,19 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     const userName = ctx ? (ctx.name1 || 'User') : 'User';
     parts.push(DIRECTOR_LOCK.replace(/\{\{user\}\}/g, userName));
 
+    // user 人设（手填）
+    const persona = String(s.userPersonaText || '').trim();
+    if (persona) {
+      parts.push('【USER 人设（最高优先级，生成任何选项前必读）】');
+      parts.push('"""');
+      parts.push(persona);
+      parts.push('"""');
+      parts.push('⚠ 上面这段是本张卡里 user 的真实人设。所有以「我：」开头的候选，');
+      parts.push('  必须符合这个人设——身份、性格、说话方式、此刻的状态、信息边界都不能违背。');
+      parts.push('  不要写成另一个人，不要加"作者觉得帅"的行为。');
+      parts.push('');
+    }
+
     const isCutScene = isCutSceneBeat(beatInfo);
 
     if (beatInfo && beatInfo.goal) {
@@ -788,10 +816,22 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       parts.push(wi);
       parts.push('"""');
       parts.push('');
-      parts.push('⚠ 若上面的世界书条目里包含 user 的人设 / 身份 / 说话方式 / 性格，');
+      parts.push('⚠ 若上面的世界书条目里包含 user 或在场角色的人设 / 身份 / 说话方式 / 性格，');
       parts.push('  生成选项时必须服从——不要写成与这个人设不符的另一个人。');
       parts.push('');
     }
+
+    parts.push('【人设推演 —— 生成候选前必做】');
+    parts.push('');
+    parts.push('写任何选项之前，先在脑内逐个过一遍本轮在场角色（含 user）：');
+    parts.push('  ① 他是谁（身份 / 性格 / 此刻情绪 / 他知道什么、不知道什么）；');
+    parts.push('  ② 以他的性格，此刻最可能做什么；');
+    parts.push('  ③ 以他的说话方式，此刻会怎么开口（用词风格）。');
+    parts.push('选项必须从这三格里长出来——不要写"一般人会有的反应"，要写"这个角色会有的反应"。');
+    parts.push('判断标准：熟人看到这条选项，会说"对，这就是他会干的事"→过关；');
+    parts.push('若换上任何别的角色标签也成立、看不出是谁 → 不合格，重写。');
+    parts.push('user 也按 user 的人设写；世界书命中条目里有该角色人设的，优先服从世界书。');
+    parts.push('');
 
     parts.push('【接续自检 —— 生成候选前，必须先在脑内做这一步】');
     parts.push('');
@@ -1770,6 +1810,19 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
           '</div>' +
         '</details>' +
 
+        '<details class="so-nb-set-group" open>' +
+          '<summary>User 人设（每次生成选项都会带上）</summary>' +
+          '<div class="so-nb-set-group-body">' +
+            '<p class="so-nb-panel-label-hint" style="margin-left:0;">' +
+              '在这里填 <b>本张卡里 user 是谁</b>：身份 / 性格 / 说话方式 / 此刻情绪 / 已知与未知。' +
+              '每次生成选项时，这段会作为【最高优先级人设约束】拼进 prompt，' +
+              '让选项符合这张卡的 user，而不是通用玩家。<br>' +
+              '换卡时记得改这里。留空 = 不启用。' +
+            '</p>' +
+            '<textarea id="so-nb-set-persona" rows="10" placeholder="例：\n姓名：李烨真\n身份：高中老师，教语文\n性格：表面温和，心里记仇；不爱主动，但被逼到墙角会立刻翻脸\n说话方式：短句，偶尔带一句古诗；不爆粗\n此刻：刚发现学生作弊，还没决定要不要拆穿\n已知：学生以为他不知道；不知道学生已经通知了家长\n不知道：家长今晚会来学校">' + escapeText(s.userPersonaText) + '</textarea>' +
+          '</div>' +
+        '</details>' +
+
         '<details class="so-nb-set-group">' +
           '<summary>生成设置</summary>' +
           '<div class="so-nb-set-group-body">' +
@@ -1912,6 +1965,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     bindInput('#so-nb-set-endpoint', 'connEndpoint');
     bindInput('#so-nb-set-apikey', 'connApiKey');
     bindInput('#so-nb-set-tpl', 'customOptionTemplate');
+    bindInput('#so-nb-set-persona', 'userPersonaText');
 
     settingsEl.querySelector('#so-nb-set-jb-mode').addEventListener('change', function () {
       const st = loadSettings();
@@ -2511,7 +2565,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
           '悬浮窗常驻（折叠成 🧭 圆标）' +
         '</label>' +
         '<p style="opacity:0.7; font-size:0.85em;">' +
-          '连接 / 模板 / 破甲 / 输出上限 / 提示词 / 上下文上限都在 🧭 面板里的 ⛭ 设置中。' +
+          '连接 / 模板 / 破甲 / 输出上限 / User 人设 / 提示词 / 上下文上限都在 🧭 面板里的 ⛭ 设置中。' +
         '</p>' +
       '</div>';
     container.appendChild(div);
@@ -2579,7 +2633,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       if (beatPollTimer) clearInterval(beatPollTimer);
       beatPollTimer = setInterval(checkBeatChanged, 1000);
 
-      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 + 世界书召回 + 切拍感知）');
+      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 + 世界书召回 + 人设推演 + 切拍感知）');
     });
   });
 })();
