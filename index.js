@@ -2,6 +2,7 @@
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
 // v3.7.1
 // 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁 + 世界书召回 + 人设推演】
+// ★ 本次新增：人设不跨卡残留（换卡 / 换存档 / 换聊天时 User 人设框自动清空）
 // ============================================================================
 
 (function () {
@@ -230,6 +231,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     jailbreakText: '',
     maxOutputTokens: 0,
     userPersonaText: '',
+    // ★ 新增：记录"这个聊天/这张卡"上一次用的 user 人设所属的身份键，
+    //   用来判断是否发生了换卡 / 换存档 / 换聊天 → 触发清空。
+    userPersonaTextCardKey: '',
   };
 
   const MIN_OUTPUT_TOKENS = 4096;
@@ -280,9 +284,59 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     if (s.jailbreakText === undefined) s.jailbreakText = '';
     if (s.maxOutputTokens === undefined) s.maxOutputTokens = 0;
     if (s.userPersonaText === undefined) s.userPersonaText = '';
+    // ★ 新增键的默认由下方 Object.assign(DEFAULTS, …) 兜底；此处不显式设置，
+    //   以免将来换默认值时被这里的硬编码覆盖。
     s._v = CFG_VERSION;
     saveSettings();
     console.log('[next-beat] 已迁移设置到 v' + CFG_VERSION);
+  }
+
+  // ==========================================================
+  // 【人设不跨卡残留】—— 换卡 / 换存档 / 换聊天时自动清空 User 人设框
+  // ----------------------------------------------------------
+  // 身份键 = 群聊走 groupId；单聊走 characterId + chatId。
+  //   · 换角色卡        → characterId 变        → 键变 → 清空
+  //   · 同一卡换存档    → chatId 变             → 键变 → 清空
+  //   · 切群聊          → groupId 变            → 键变 → 清空
+  //   · 同聊天内刷新    → 键不变                → 保留
+  // 只影响插件自己的 userPersonaText，不碰 ST 的 Persona，不碰神谕本体。
+  // ==========================================================
+
+  // 计算"当前角色卡 + 聊天"的稳定身份键。纯读取，不改任何状态。
+  function personaCardKey() {
+    try {
+      const ctx = getCtx();
+      if (!ctx) return '';
+      const g = String(ctx.groupId || '');
+      const c = String(ctx.characterId == null ? '' : ctx.characterId);
+      const ch = String(ctx.chatId == null ? '' : ctx.chatId);
+      return g ? ('g:' + g) : ('c:' + c + '||' + ch);
+    } catch (e) {
+      return '';
+    }
+  }
+
+  // 若卡/聊天身份与上次记录的不一致：清空 userPersonaText 并返回 true（表示确实清了）。
+  // 幂等：同一张卡内重复调用无副作用。传 s 时必须是一个可写的设置对象。
+  function maybeClearUserPersona(s) {
+    if (!s) return false;
+    const key = personaCardKey();
+    if (!key) return false;
+    if (s.userPersonaTextCardKey === key) return false;   // 同一身份 → 不动
+    s.userPersonaTextCardKey = key;                        // 先记新身份
+    if (String(s.userPersonaText || '').trim()) {
+      s.userPersonaText = '';                              // 有残留才清，避免多余写盘
+      return true;
+    }
+    return false;
+  }
+
+  // 把设置面板里的 User 人设输入框与当前设置同步（面板没开就静默跳过）。
+  function syncPersonaInput() {
+    try {
+      const el = document.querySelector('#so-nb-set-persona');
+      if (el) el.value = String(loadSettings().userPersonaText || '');
+    } catch (e) { /* 面板没开 / 文档不可用 → 无所谓 */ }
   }
 
   function loadSettings() {
@@ -295,6 +349,11 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     );
     const s = ctx.extensionSettings[MODULE_ID];
     migrateSettings(s);
+    // ★ 人设不跨卡残留：只要读设置就顺手校验一次身份（同卡零开销、幂等）
+    if (maybeClearUserPersona(s)) {
+      saveSettings();
+      syncPersonaInput();
+    }
     return s;
   }
 
@@ -907,7 +966,8 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
 
     return parts.join('\n');
   }
-    const ORACLE_JB_KEYS = [
+
+  const ORACLE_JB_KEYS = [
     'jailbreakPrompt', 'jailbreakText', 'customJailbreak', 'jbText',
     'builtinJailbreakText', 'systemPromptJailbreak',
   ];
@@ -1817,7 +1877,8 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
               '在这里填 <b>本张卡里 user 是谁</b>：身份 / 性格 / 说话方式 / 此刻情绪 / 已知与未知。' +
               '每次生成选项时，这段会作为【最高优先级人设约束】拼进 prompt，' +
               '让选项符合这张卡的 user，而不是通用玩家。<br>' +
-              '换卡时记得改这里。留空 = 不启用。' +
+              '<b>换卡 / 换存档 / 换聊天时这里会自动清空</b>——避免上一张卡的人设串到下一张卡上；' +
+              '同一张卡里反复生成不会丢。换卡后记得重新填一次。' +
             '</p>' +
             '<textarea id="so-nb-set-persona" rows="10" placeholder="例：\n姓名：李烨真\n身份：高中老师，教语文\n性格：表面温和，心里记仇；不爱主动，但被逼到墙角会立刻翻脸\n说话方式：短句，偶尔带一句古诗；不爆粗\n此刻：刚发现学生作弊，还没决定要不要拆穿\n已知：学生以为他不知道；不知道学生已经通知了家长\n不知道：家长今晚会来学校">' + escapeText(s.userPersonaText) + '</textarea>' +
           '</div>' +
@@ -2480,6 +2541,31 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       setTimeout(rehangChips, 100);
       updatePanel();
       applyFloatVisibility();
+      // ★ 人设不跨卡残留：换聊天 / 换存档 / 换卡时清空 User 人设框
+      //   （loadSettings 内部已含 maybeClearUserPersona；这里再显式同步一次输入框与提示）
+      try {
+        const s = loadSettings();     // 会触发清理
+        syncPersonaInput();
+        // 若刚才真的清了：给用户一个温和提示（同一张卡内刷新不会走到这里）
+        if (!String(s.userPersonaText || '').trim()) {
+          const hadKey = s.userPersonaTextCardKey;
+          if (hadKey) {
+            // 无法区分「本来就没填」与「刚被清空」，故仅在确有提示需求时弹；
+            // 为避免误报，只在设置了面板正开着时才提示（面板开着 = 用户正关注这块）
+            const pe = document.querySelector('#so-nb-set-persona');
+            const panelOpen = pe && settingsEl && settingsEl.classList.contains('so-nb-set-show');
+            if (panelOpen && window.toastr && window.toastr.info) {
+              window.toastr.info(
+                '已切换聊天 / 角色卡，User 人设已自动清空（避免跨卡残留）。',
+                '🧭 下一拍建议',
+                { timeOut: 4000, extendedTimeOut: 2000 }
+              );
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[next-beat] 换卡清理 User 人设时出错：', e);
+      }
     });
   }
 
@@ -2566,6 +2652,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
         '</label>' +
         '<p style="opacity:0.7; font-size:0.85em;">' +
           '连接 / 模板 / 破甲 / 输出上限 / User 人设 / 提示词 / 上下文上限都在 🧭 面板里的 ⛭ 设置中。' +
+          '<br><b>User 人设在换卡 / 换存档 / 换聊天时会自动清空</b>，避免跨卡残留。' +
         '</p>' +
       '</div>';
     container.appendChild(div);
@@ -2628,12 +2715,18 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       watchWandMenu();
       refreshChips();
       applyFloatVisibility();
+      // ★ 首次载入：也校验一次（覆盖"打开酒馆时已在某张卡"的场景——避免上次卡的人设残留）。
+      try {
+        const s = loadSettings();
+        syncPersonaInput();
+        void s;
+      } catch (e) { /* ignore */ }
 
       lastBeatSig = currentBeatSignature();
       if (beatPollTimer) clearInterval(beatPollTimer);
       beatPollTimer = setInterval(checkBeatChanged, 1000);
 
-      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 + 世界书召回 + 人设推演 + 切拍感知）');
+      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 + 世界书召回 + 人设推演 + 切拍感知 + 人设不跨卡残留）');
     });
   });
 })();
