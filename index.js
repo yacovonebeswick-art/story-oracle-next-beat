@@ -1,7 +1,7 @@
 // ============================================================================
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
 // v3.7.1
-// 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁】
+// 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁 + 世界书召回】
 // ============================================================================
 
 (function () {
@@ -71,9 +71,6 @@
   ];
 
   // 判定分镜/转场拍的关键词 —— 只在【拍标题】里判。
-  // 删掉 '同时' / '另一边'：这两个词太容易在正常拍标题里自然出现
-  //（比如「同时处理两件事」），会造成大面积误判，把普通拍当成分镜拍，
-  // 导致「我：」选项一条都不出。
   const CUT_SCENE_KEYWORDS = ['分镜', '转场', '切到', '视角切', 'B线', '支线', '分镜拍'];
 
   const DEFAULT_OPTION_TEMPLATE = `# 【选项思维链 - 代号：午夜提词器 / MBTI 八维选项专用】
@@ -241,9 +238,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   let currentAbort = null;
   let lastRequestKey = null;
   let settingsEl = null;
-  // 本次请求是否在途（只由 requestNextBeatOptions 设 / 清）
   let isGeneratingBeat = false;
-  // 轮询用：上一次看到的「当前拍签名」与定时器句柄
   let lastBeatSig = null;
   let beatPollTimer = null;
 
@@ -313,7 +308,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       }
     } catch (e) { /* ignore */ }
     const chosen = own > 0 ? own : base;
-    return Math.max(chosen, MIN_OUTPUT_TOKENS);   // 4096 地板
+    return Math.max(chosen, MIN_OUTPUT_TOKENS);
   }
 
   function readDoneSet() {
@@ -384,16 +379,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     };
   }
 
-  // ==========================================================
-  // 【DOM 兜底探针】
-  // ----------------------------------------------------------
-  // 故事神谕左侧面板里，当前拍前面会有一个 ▶ 标记（已完成是 ✓）。
-  // 当数据层（getSeq / seqActiveBeat）在「用户点完成」和「生成新回复」
-  // 之间不刷新时，DOM 一定已经刷新了。于是我们从 DOM 上读它。
-  //
-  // 返回 1-based 的拍序号；读不到返回 null。
-  // 宽容匹配多种可能的选择器 / 类名 / 结构。
-  // ==========================================================
   function readDomActiveBeatIndex() {
     try {
       const roots = [
@@ -457,7 +442,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return null;
   }
 
-  // 从 DOM 上按拍序号读那行的标题/目标文本
   function readDomBeatTextByIndex(idx) {
     try {
       const all = document.querySelectorAll('.so-beat-item, .story-oracle-beat, .so-beat-row, li, div');
@@ -485,14 +469,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return null;
   }
 
-  // ==========================================================
-  // 【当前拍签名】
-  // ----------------------------------------------------------
-  // 把「当前是哪一拍」压成一个短字符串，用于轮询比对。
-  // 组成：聊天键 + 拍序号 + 总拍数 + 拍标题 + 本拍目标 + DOM ▶ 序号。
-  // 任一变化（换聊天 / 切拍 / 改标题 / 改目标 / DOM 上 ▶ 换了）都会得到不同签名。
-  // 不在引导序列中时返回 ''，与「有拍」区分开。
-  // ==========================================================
   function currentBeatSignature() {
     const info = getActiveBeatInfo();
     const domIdx = readDomActiveBeatIndex();
@@ -507,12 +483,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     ].join('\u0001');
   }
 
-  // ==========================================================
-  // 【DOM ↔ 数据层对账】
-  // ----------------------------------------------------------
-  // 如果 getActiveBeatInfo() 读到的拍和神谕左侧 DOM ▶ 序号不一致，
-  // 以 DOM 为准，直接在面板上把「当前拍」文案改过来。
-  // ==========================================================
   function reconcilePanelWithDom() {
     if (!panelEl || !panelEl.isConnected) return;
     const domIdx = readDomActiveBeatIndex();
@@ -534,20 +504,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     host.textContent = line;
   }
 
-  // ==========================================================
-  // 【拍变化轮询】
-  // ----------------------------------------------------------
-  // 每 1 秒跑一次：签名变了 → 刷新面板 / 清掉旧候选 chip / 刷新悬浮球，
-  // 并且做一次 DOM ↔ 数据层对账。
-  //
-  // ⚠ 为什么是 removeAllChips 而不是 refreshChips：
-  //   refreshChips = removeAllChips + rehangChips，而 rehangChips 用的是
-  //   lastByChat[key].options + entry.beatInfo —— 那是【上一次生成那一刻】的快照。
-  //   切拍之后，那份快照属于【上一拍】，重挂出来只会让用户误以为旧候选还对应新拍。
-  //   所以切拍时把旧 chip 清掉，让「旧拍的候选已过期」这件事从视觉上如实发生。
-  //   （lastByChat 里的记录本身保留 —— 供切回该拍时对照 / 定位。）
-  // 幂等：签名没变时什么都不做。
-  // ==========================================================
   function checkBeatChanged() {
     let sig;
     try {
@@ -562,7 +518,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     try {
       updatePanel();
       reconcilePanelWithDom();
-      removeAllChips();      // 旧候选属于旧拍 —— 切拍后清掉，不重挂
+      removeAllChips();
       updateFloatStatus();
     } catch (e) {
       console.error('[next-beat] 切拍刷新失败：', e);
@@ -727,6 +683,61 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return CUT_SCENE_KEYWORDS.some(function (kw) { return title.indexOf(kw) >= 0; });
   }
 
+  // ==========================================================
+  // 【世界书召回】—— 从酒馆世界书里取与正文相关的条目
+  // 简化关键词匹配 + 常驻条目无条件带上。只读，不改世界书。
+  // ==========================================================
+  function collectWorldInfoFor(narrativeText) {
+    try {
+      const ctx = getCtx();
+      if (!ctx) return '';
+
+      let books = null;
+      const es = ctx.extensionSettings || {};
+      if (es.world_info && es.world_info.entries) {
+        books = es.world_info.entries;
+      } else if (ctx.worldInfo && ctx.worldInfo.entries) {
+        books = ctx.worldInfo.entries;
+      } else if (es.world_info && typeof es.world_info === 'object') {
+        books = es.world_info;
+      } else if (ctx.worldInfo && typeof ctx.worldInfo === 'object') {
+        books = ctx.worldInfo;
+      }
+      if (!books) return '';
+
+      const text = String(narrativeText || '');
+      const hits = [];
+
+      const values = Array.isArray(books) ? books : Object.values(books);
+      for (const e of values) {
+        if (!e || typeof e !== 'object') continue;
+        if (e.disable === true || e.disabled === true) continue;
+
+        let keys = e.keys || e.key || e.keywords || '';
+        if (typeof keys === 'string') {
+          keys = keys.split(',').map(function (s) { return s.trim(); });
+        }
+        if (!Array.isArray(keys)) keys = [];
+        keys = keys.filter(Boolean);
+
+        const isConstant = e.constant === true || e.constant === 'true';
+        const hit = isConstant || keys.some(function (k) {
+          return k && text.indexOf(k) >= 0;
+        });
+        if (!hit) continue;
+
+        const content = String(e.content || e.value || '').trim();
+        if (content) hits.push(content);
+      }
+
+      if (!hits.length) return '';
+      return hits.slice(0, 4).join('\n\n');
+    } catch (err) {
+      console.warn('[next-beat] 世界书召回失败：', err);
+      return '';
+    }
+  }
+
   function buildUserPrompt(narrativeText, beatInfo) {
     const s = loadSettings();
     const maxChars = clampNarrativeChars(s.maxNarrativeChars);
@@ -768,6 +779,19 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     parts.push(trimmed);
     parts.push('"""');
     parts.push('');
+
+    // 世界书召回：拼进选项生成 prompt
+    const wi = collectWorldInfoFor(trimmed);
+    if (wi) {
+      parts.push('【世界书命中条目（供参考，不要复述）】');
+      parts.push('"""');
+      parts.push(wi);
+      parts.push('"""');
+      parts.push('');
+      parts.push('⚠ 若上面的世界书条目里包含 user 的人设 / 身份 / 说话方式 / 性格，');
+      parts.push('  生成选项时必须服从——不要写成与这个人设不符的另一个人。');
+      parts.push('');
+    }
 
     parts.push('【接续自检 —— 生成候选前，必须先在脑内做这一步】');
     parts.push('');
@@ -843,8 +867,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
 
     return parts.join('\n');
   }
-
-  const ORACLE_JB_KEYS = [
+    const ORACLE_JB_KEYS = [
     'jailbreakPrompt', 'jailbreakText', 'customJailbreak', 'jbText',
     'builtinJailbreakText', 'systemPromptJailbreak',
   ];
@@ -947,16 +970,13 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return label;
   }
 
-  // 标签后第一字若是人称代词，自动砍掉（兜底）
   function stripLeadingPronoun(label, content) {
     let c = String(content || '').trim();
-    // 「我」标签下：砍掉开头的「我」（如「我把」「我站」「我，」）
     if (label === LBL_USER) {
       c = c.replace(/^我(?=[\u4e00-\u9fa5])/, '').trim();
       c = c.replace(/^我(?=[，,。；;、\s])/, '').trim();
       c = c.replace(/^我$/, '').trim();
     }
-    // 角色标签下：砍掉开头的「他」「她」「它」（含「他把」「她站」）
     if (label !== LBL_USER && label !== LBL_TIME) {
       c = c.replace(/^[他她它](?=[\u4e00-\u9fa5])/, '').trim();
       c = c.replace(/^[他她它](?=[，,。；;、\s])/, '').trim();
@@ -1017,7 +1037,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
         const innerContent = cm ? cm[1].trim() : content;
         out.push({ label: innerLabel, content: stripLeadingPronoun(innerLabel, innerContent), raw: t });
       } else {
-        // 认不出标签的裸行：丢掉，不产生「选项」这种垃圾标签
         continue;
       }
     }
@@ -2175,26 +2194,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     if (el) el.textContent = text;
   }
 
-  // ==========================================================
-  // 【面板刷新】—— 「当前拍」一栏【永远现读】getActiveBeatInfo()
-  // ----------------------------------------------------------
-  // ⚠ 这是 3.7.1 的语义修正点：
-  //   面板上那一栏叫「当前拍」，它的语义是「神谕此刻在哪一拍」，
-  //   所以必须现读 getActiveBeatInfo()。
-  //
-  //   绝不能读 entry.beatInfo —— 那是【上一次生成候选那一刻】的拍快照，
-  //   它的正确用途只有一个：给 chip 标注「这批候选属于哪一拍」。
-  //   切拍之后（用户点完成 / 神谕推进），entry.beatInfo 依旧是旧拍，
-  //   若拿它填「当前拍」一栏，面板就会一直停在旧拍，直到手动生成一次
-  //   才更新 —— 这正是之前那个「切拍不更新」的病灶。
-  //
-  //   entry.options（最近一次生成的候选）仍读 entry：面板那栏写的就是
-  //   「最近一次生成」。
-  // ==========================================================
   function updatePanel() {
     if (!panelEl || !panelEl.isConnected) return;
 
-    // 最近一次生成（候选）：读 entry —— 语义就是「最近一次生成」。
     const entry = getLast();
     if (entry && Array.isArray(entry.options) && entry.options.length) {
       setPanelSuggestion(entry.options);
@@ -2202,7 +2204,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       setPanelSuggestion(null);
     }
 
-    // 当前拍：现读 getActiveBeatInfo()，不读 entry.beatInfo。
     const b = getActiveBeatInfo();
     if (b && b.goal) {
       setPanelBeat('第 ' + b.progress + ' 拍' + (b.beatTitle ? ' · ' + b.beatTitle : '') + '\n目标：' + b.goal);
@@ -2574,12 +2575,11 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       refreshChips();
       applyFloatVisibility();
 
-      // 启动「切拍」轮询：每秒比对一次当前拍签名
       lastBeatSig = currentBeatSignature();
       if (beatPollTimer) clearInterval(beatPollTimer);
       beatPollTimer = setInterval(checkBeatChanged, 1000);
 
-      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 + 切拍感知）');
+      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 + 世界书召回 + 切拍感知）');
     });
   });
 })();
