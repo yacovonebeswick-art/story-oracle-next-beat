@@ -1,14 +1,15 @@
 // ============================================================================
 // 故事神谕 · 下一拍建议（独立插件，不改 story-oracle 任何代码）
-// v3.7.0
-// 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁】
+// v3.7.1
+// 【已缝合：导演锁 + 分镜强制切分 + 氛围温度锁 + 连续性锁 + 世界书召回 + 人设推演】
+// ★ 本次新增：User 人设按存档分开存（换卡 / 换存档 / 换聊天时各归各，切回来仍在）
 // ============================================================================
 
 (function () {
   'use strict';
 
   const MODULE_ID = 'story-oracle-next-beat';
-  const VERSION = '3.7.0';
+  const VERSION = '3.7.1';
   const CFG_VERSION = 15;
 
   const ORACLE_SETTINGS_KEY = 'storyOracle';
@@ -71,9 +72,6 @@
   ];
 
   // 判定分镜/转场拍的关键词 —— 只在【拍标题】里判。
-  // 删掉 '同时' / '另一边'：这两个词太容易在正常拍标题里自然出现
-  //（比如「同时处理两件事」），会造成大面积误判，把普通拍当成分镜拍，
-  // 导致「我：」选项一条都不出。
   const CUT_SCENE_KEYWORDS = ['分镜', '转场', '切到', '视角切', 'B线', '支线', '分镜拍'];
 
   const DEFAULT_OPTION_TEMPLATE = `# 【选项思维链 - 代号：午夜提词器 / MBTI 八维选项专用】
@@ -98,6 +96,19 @@
 - 上一段的**末句情绪**是：___（冷 / 紧 / 曖 / 对峙 / 微乱 / 寻常 / 疲惫……）
 - 所有选项**都必须紧接着那一口气往下走**，不跳时间、不跳场、不脱离当下气氛。
 - 检查：玩家拿这条指令发出去，正文模型第一段能不能立刻接上？接不上就重写。
+
+## Vol.1.5 人设推演（开写前必做，不许跳过）
+
+在写任何一条选项之前，先做这一步——不写进输出，只在脑内推：
+
+1. **逐个列出本轮在场角色**（包括 user 自己）。
+2. **对每一个角色，各填三格：**
+   - **他是谁**：身份 / 性格 / 此刻情绪 / 他知道什么、不知道什么。
+   - **他此刻会做什么**：以他的性格，面对上一段末尾那件事，最可能的第一反应是什么？
+   - **他此刻会说什么**：以他的说话方式，会怎么开口？用词是什么风格？
+3. **选项直接从那三格里挑**——写"这个角色会做的"，不写"一般人会做的"。
+
+**判断标准：** 熟人看到会说"对，就是他"→过关；换个名字也成立、看不出是谁→重写。
 
 ## Vol.2 信息边界——本提示词最硬的一节
 在写任何一条选项之前，逐项确认：
@@ -150,8 +161,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
 ## Vol.5 每条选项的写法要求
 每条选项 = 一个**看得见的动作**（或动作 + 台词）。
 - **格式**：\`动作："语言。"\` 或 \`动作。\`（无台词时）
-- **第一人称**（"我"条）：主语永远是"我"。
-- **角色条**：以【正文里对该角色的称呼】起头（例如 \`王奕：……\` 或 \`吕子乔：……\`），写该角色对玩家的动作 / 台词，**不要替玩家做反应**。
+- **第一人称**（"我"条）：\`我：\` 之后**直接写动作 / 台词**，不许再出现"我"字。主语由标签承担。
+- **角色条**：以【正文里对该角色的称呼】起头，冒号后**直接写动作 / 台词**，不许再出现"他"、"她"、"它"这类人称代词。主语由标签承担。
+- **标签后第一个字符不能是"我"、"他"、"她"、"它"。**
 - **时间条**（若有）：以时间推进 / 换场为主。
 - **不写对方反应、不写内心独白。**
 - **人设决定长短**：话痨允许 2~3 句；寡言 1~2 句；中性 1~1.5 句。
@@ -173,13 +185,14 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
 **总数 4~7 条。**
 
 **不要在选项前加 MBTI 标签、编号、项目符号，也不要输出思考过程 / 自检清单 / Vol 目录 / 模板原文。**
+**标签之后直接写动作 / 台词，不要重复人称。**
 
 正面示例：
-我：我想起他昨天说过的那句话，问："……你昨天说的，是认真的吗？"
-我：我把水杯往他那边推了推："先喝口水。"
-我：我站起来，走到窗边把窗帘拉上。
-王奕：他把手里的杯子放下，抬眼看向我。
-吕子乔：他把手机往桌上一扔，靠着沙发笑了一声。
+我：想起他昨天说过的那句话，问："……你昨天说的，是认真的吗？"
+我：把水杯往他那边推了推："先喝口水。"
+我：站起来，走到窗边把窗帘拉上。
+王奕：把手里的杯子放下，抬眼看向我。
+吕子乔：把手机往桌上一扔，靠着沙发笑了一声。
 时间：半小时后，天色完全暗了下来。
 
 反面示例：
@@ -188,10 +201,12 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
 - ✗ "我靠在椅背上，没什么表情。"
 - ✗ "A. 我以 Ne 为主导发散了一下……"
 - ✗ "角色A：他抬起头。"（用了占位名）
+- ✗ "我：我站起来。"（冒号后重复了"我"）
+- ✗ "王奕：他把杯子放下。"（冒号后出现了"他"）
 
 ## Vol.8 终检（仅供你自己在脑内过一遍，**不要输出到结果里**）
 1. 数量：3 条「我」+ 1~3 条「角色X」+ 0~1 条「时间」，总数 4~7？
-2. 行首格式：都是 \`标签：内容\`，「角色」条用的是正文里的称呼吗？
+2. 行首格式：都是 \`标签：内容\`，「角色」条用的是正文里的称呼吗？标签后有没有漏出"我 / 他 / 她 / 它"？
 3. 接续：与上一段末句是同一口气吗？
 4. 信息源：关键信息凭什么是知道的？
 5. 预知感 / 零反应 / 点破 / 占上风 / 稳 / 掌控：全部排除？
@@ -215,6 +230,11 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     jailbreakMode: 'inherit',
     jailbreakText: '',
     maxOutputTokens: 0,
+    // ★ 当前生效的 User 人设（喂 prompt 时读这个；由下面按存档切换/写回维护）
+    userPersonaText: '',
+    // ★ 人设按【存档身份】分开存：{ "c:3||阿岚-2026": "人设文本", "g:12": "..." }
+    //   切换聊天 / 存档 / 卡时，人设框按当前身份从这张表读回自己那份——切回来还在。
+    userPersonaByChat: {},
   };
 
   const MIN_OUTPUT_TOKENS = 4096;
@@ -237,8 +257,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   let currentAbort = null;
   let lastRequestKey = null;
   let settingsEl = null;
-  // 本次请求是否在途（只由 requestNextBeatOptions 设 / 清）
   let isGeneratingBeat = false;
+  let lastBeatSig = null;
+  let beatPollTimer = null;
 
   function getCtx() {
     return (typeof SillyTavern !== 'undefined' && SillyTavern.getContext)
@@ -263,9 +284,85 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     if (s.jailbreakMode === undefined) s.jailbreakMode = 'inherit';
     if (s.jailbreakText === undefined) s.jailbreakText = '';
     if (s.maxOutputTokens === undefined) s.maxOutputTokens = 0;
+    if (s.userPersonaText === undefined) s.userPersonaText = '';
+    // ★ 老存档迁移：把原来那唯一一份人设，归到"当前这张卡 / 这份存档"名下。
+    if (!s.userPersonaByChat || typeof s.userPersonaByChat !== 'object') {
+      s.userPersonaByChat = {};
+      const key = personaCardKey();
+      if (key && String(s.userPersonaText || '').trim()) {
+        s.userPersonaByChat[key] = String(s.userPersonaText);
+      }
+    }
     s._v = CFG_VERSION;
     saveSettings();
     console.log('[next-beat] 已迁移设置到 v' + CFG_VERSION);
+  }
+
+  // ==========================================================
+  // 【人设不跨卡残留 · 按存档分开存】—— 每份存档保存自己的人设，切换时各归各的
+  // ----------------------------------------------------------
+  // 身份键 = 群聊走 groupId；单聊走 characterId + chatId。
+  //   · 换角色卡        → characterId 变        → 换用另一份人设
+  //   · 同一卡换存档    → chatId 变             → 换用另一份人设
+  //   · 切群聊          → groupId 变            → 换用另一份人设
+  //   · 切回原存档      → 键复原                → 原来那份人设仍在
+  // 只影响插件自己的 userPersonaText，不碰 ST 的 Persona，不碰神谕本体。
+  // ==========================================================
+
+  // 计算"当前角色卡 + 聊天"的稳定身份键。纯读取，不改任何状态。
+  function personaCardKey() {
+    try {
+      const ctx = getCtx();
+      if (!ctx) return '';
+      const g = String(ctx.groupId || '');
+      const c = String(ctx.characterId == null ? '' : ctx.characterId);
+      const ch = String(ctx.chatId == null ? '' : ctx.chatId);
+      return g ? ('g:' + g) : ('c:' + c + '||' + ch);
+    } catch (e) {
+      return '';
+    }
+  }
+
+  // 把 userPersonaText（当前生效值）按当前身份【写回】映射表。
+  // 在输入框每次改动 / 切换聊天前调用，保证"这份存档的人设"被记住。
+  function stashUserPersona(s) {
+    if (!s || typeof s !== 'object') return;
+    if (!s.userPersonaByChat || typeof s.userPersonaByChat !== 'object') s.userPersonaByChat = {};
+    const key = personaCardKey();
+    if (!key) return;
+    const text = String(s.userPersonaText || '');
+    if (text.trim()) s.userPersonaByChat[key] = text;
+    else delete s.userPersonaByChat[key];   // 清空 = 这份存档不再记录，保持表干净
+  }
+
+  // 把 userPersonaText（当前生效值）按【指定身份键】写回映射表（用于"切走前"归位旧存档）。
+  function stashUserPersonaForKey(s, key) {
+    if (!s || typeof s !== 'object' || !key) return;
+    if (!s.userPersonaByChat || typeof s.userPersonaByChat !== 'object') s.userPersonaByChat = {};
+    const text = String(s.userPersonaText || '');
+    if (text.trim()) s.userPersonaByChat[key] = text;
+    else delete s.userPersonaByChat[key];
+  }
+
+  // 按当前身份从映射表【读回】对应那份人设，填入 userPersonaText（当前生效值）。
+  // 返回 true 表示值发生了变化（需要同步 UI / 落盘）。
+  function loadUserPersonaForChat(s) {
+    if (!s || typeof s !== 'object') return false;
+    if (!s.userPersonaByChat || typeof s.userPersonaByChat !== 'object') s.userPersonaByChat = {};
+    const key = personaCardKey();
+    if (!key) return false;
+    const want = String(s.userPersonaByChat[key] || '');
+    if (String(s.userPersonaText || '') === want) return false;
+    s.userPersonaText = want;
+    return true;
+  }
+
+  // 把设置面板里的 User 人设输入框与当前生效值同步（面板没开就静默跳过）。
+  function syncPersonaInput() {
+    try {
+      const el = document.querySelector('#so-nb-set-persona');
+      if (el) el.value = String(loadSettings().userPersonaText || '');
+    } catch (e) { /* 面板没开 / 文档不可用 → 无所谓 */ }
   }
 
   function loadSettings() {
@@ -278,6 +375,12 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     );
     const s = ctx.extensionSettings[MODULE_ID];
     migrateSettings(s);
+    // ★ 人设按存档分开存：每次读设置都按当前身份把对应那份读回 userPersonaText。
+    //   同一存档内是幂等空操作；换档 / 换卡时就把"那一份"换进来了。
+    if (loadUserPersonaForChat(s)) {
+      saveSettings();
+      syncPersonaInput();
+    }
     return s;
   }
 
@@ -306,7 +409,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       }
     } catch (e) { /* ignore */ }
     const chosen = own > 0 ? own : base;
-    return Math.max(chosen, MIN_OUTPUT_TOKENS);   // 4096 地板
+    return Math.max(chosen, MIN_OUTPUT_TOKENS);
   }
 
   function readDoneSet() {
@@ -375,6 +478,152 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       seed: String(beat.seed || ''),
       why: String(beat.why || ''),
     };
+  }
+
+  function readDomActiveBeatIndex() {
+    try {
+      const roots = [
+        document.querySelector('#story-oracle-panel'),
+        document.querySelector('.story-oracle-panel'),
+        document.querySelector('#so-panel'),
+        document.querySelector('.so-panel'),
+        document.body,
+      ].filter(Boolean);
+
+      const rowSelectors = [
+        '.so-beat-item',
+        '.story-oracle-beat',
+        '.so-beat-row',
+        'li',
+        'div',
+      ];
+
+      for (const root of roots) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+          acceptNode: function (n) {
+            const t = n.nodeValue;
+            if (!t) return NodeFilter.FILTER_REJECT;
+            return /[▶►▸]/.test(t) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+          },
+        });
+        let node;
+        while ((node = walker.nextNode())) {
+          let el = node.parentElement;
+          let hops = 0;
+          while (el && hops < 6) {
+            const txt = String(el.textContent || '');
+            const m = txt.match(/第\s*(\d+)\s*\/\s*\d+\s*拍/) ||
+                      txt.match(/第\s*(\d+)\s*拍/) ||
+                      txt.match(/(\d+)\s*\/\s*\d+\s*拍/) ||
+                      txt.match(/^\s*(\d+)[\.、]/m);
+            if (m) {
+              const n = Number(m[1]);
+              if (Number.isFinite(n) && n >= 1) return n;
+            }
+            el = el.parentElement;
+            hops += 1;
+          }
+        }
+
+        for (const sel of rowSelectors) {
+          const rows = root.querySelectorAll(sel + '.active, ' + sel + '.current, ' + sel + '.[data-active="true"]');
+          for (const row of rows) {
+            const txt = String(row.textContent || '');
+            const m = txt.match(/第\s*(\d+)\s*\/\s*\d+\s*拍/) ||
+                      txt.match(/第\s*(\d+)\s*拍/) ||
+                      txt.match(/(\d+)\s*\/\s*\d+\s*拍/);
+            if (m) {
+              const n = Number(m[1]);
+              if (Number.isFinite(n) && n >= 1) return n;
+            }
+          }
+        }
+      }
+    } catch (e) { /* 静默 */ }
+    return null;
+  }
+
+  function readDomBeatTextByIndex(idx) {
+    try {
+      const all = document.querySelectorAll('.so-beat-item, .story-oracle-beat, .so-beat-row, li, div');
+      for (const el of all) {
+        const t = String(el.textContent || '');
+        const m = t.match(/第\s*(\d+)\s*\/\s*\d+\s*拍/) ||
+                  t.match(/第\s*(\d+)\s*拍/) ||
+                  t.match(/^\s*(\d+)[\.、]/m);
+        if (!m) continue;
+        if (Number(m[1]) !== idx) continue;
+        const lines = t.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+        let title = '';
+        let goal = '';
+        for (const ln of lines) {
+          if (/第\s*\d+\s*\/?\s*\d*\s*拍/.test(ln)) continue;
+          if (/^[▶►▸✓✗]/.test(ln)) continue;
+          if (!title) { title = ln; continue; }
+          if (/目标[:：]/.test(ln)) { goal = ln.replace(/^.*?目标[:：]\s*/, ''); break; }
+        }
+        const gm = t.match(/目标[:：]\s*([^\n]+)/);
+        if (gm) goal = gm[1].trim();
+        return { title, goal };
+      }
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  function currentBeatSignature() {
+    const info = getActiveBeatInfo();
+    const domIdx = readDomActiveBeatIndex();
+    if (!info && domIdx == null) return '';
+    return [
+      chatKey(),
+      info ? info.cursor : '',
+      info ? info.total : '',
+      info ? info.beatTitle : '',
+      info ? info.goal : '',
+      domIdx == null ? '' : domIdx,
+    ].join('\u0001');
+  }
+
+  function reconcilePanelWithDom() {
+    if (!panelEl || !panelEl.isConnected) return;
+    const domIdx = readDomActiveBeatIndex();
+    if (domIdx == null) return;
+
+    const info = getActiveBeatInfo();
+    const dataIdx = info ? (info.cursor + 1) : null;
+
+    if (dataIdx === domIdx) return;
+
+    const host = panelEl.querySelector('#so-nb-panel-beat');
+    if (!host) return;
+
+    const domText = readDomBeatTextByIndex(domIdx);
+
+    let line = '第 ' + domIdx + (info && info.total ? ' / ' + info.total : '') + ' 拍';
+    if (domText && domText.title) line += ' · ' + domText.title;
+    if (domText && domText.goal) line += '\n目标：' + domText.goal;
+    host.textContent = line;
+  }
+
+  function checkBeatChanged() {
+    let sig;
+    try {
+      sig = currentBeatSignature();
+    } catch (e) {
+      console.error('[next-beat] currentBeatSignature 挂了：', e);
+      return;
+    }
+    if (sig === lastBeatSig) return;
+    lastBeatSig = sig;
+
+    try {
+      updatePanel();
+      reconcilePanelWithDom();
+      removeAllChips();
+      updateFloatStatus();
+    } catch (e) {
+      console.error('[next-beat] 切拍刷新失败：', e);
+    }
   }
 
   function extractHttpStatus(err) {
@@ -476,12 +725,19 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     '如果你先在脑内或草稿里写了分析，请只保留最后的候选行，前面全部删掉。' +
     '\n' +
     '输出格式（严格遵守）：每条一行，行首固定为「标签：」加具体内容。' +
+    '⚠ 标签之后【直接写动作 / 台词】，绝对不许再出现人称代词（我 / 他 / 她 / 它）。' +
+    '  标签已经承担了主语的作用。' +
     '标签规则：' +
-    '  1) `我：`      —— 玩家自己（第一人称「我」）的动作/台词；' +
-    '  2) `角色名：`  —— 最近正文里【在场的其他角色】的动作/台词，' +
-    '标签用正文里对这个人物的称呼替换（例如 `王奕：`、`吕子乔：`）；' +
-    '只有在确实无法确定该怎么称呼时才退回 `角色A：` / `角色B：` / `角色C：`；' +
-    '不要凭空发明正文里没出现过的人物。' +
+    '  1) `我：`      —— 玩家自己的动作 / 台词。冒号后第一字不能是「我」。' +
+    '     ✓ 我：把水杯推过去："先喝口水。"' +
+    '     ✗ 我：我把水杯推过去。' +
+    '  2) `角色名：`  —— 最近正文里【在场的其他角色】的动作 / 台词。' +
+    '    冒号后第一字不能是「他」「她」「它」。' +
+    '    标签用正文里对这个人物的称呼替换（例如 `王奕：`、`吕子乔：`）；' +
+    '    只有在确实无法确定该怎么称呼时才退回 `角色A：` / `角色B：` / `角色C：`；' +
+    '    不要凭空发明正文里没出现过的人物。' +
+    '     ✓ 吕子乔：把手机往桌上一扔，靠着沙发笑了一声。' +
+    '     ✗ 吕子乔：他把手机往桌上一扔。' +
     '  3) `时间：`    —— 时间推进 / 换场；只有在满足下述条件时才使用。' +
     '\n' +
     '内容要求：' +
@@ -506,16 +762,13 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     '  · 禁止直接写本拍目标里的场景动作，中间怎么过去的、怎么变过去的，一个字不提。' +
     '\n' +
     '示例（仅示范行头与格式；实际人物/场景由你根据正文判断）：' +
-    '我：我站起身，走到门口把帘子拉下。\n' +
-    '我：我把杯子里的水一口喝掉，沉默了两秒。\n' +
-    '我：我回头看了一眼，低声说：「我们换个地方谈。」\n' +
-    '王奕：他把手里的杯子放下，抬眼看向我。\n' +
-    '吕子乔：他靠在墙边，抱着胳膊没说话。\n' +
+    '我：站起身，走到门口把帘子拉下。\n' +
+    '我：把杯子里的水一口喝掉，沉默了两秒。\n' +
+    '我：回头看了一眼，低声说：「我们换个地方谈。」\n' +
+    '王奕：把手里的杯子放下，抬眼看向我。\n' +
+    '吕子乔：靠在墙边，抱着胳膊没说话。\n' +
     '时间：半小时后，天色完全暗了下来。';
 
-  // ==========================================================
-  // 【导演锁】清洗函数：拦截 AI 返回的文本，强制清除违禁词
-  // ==========================================================
   function sanitizeDirectorLock(text) {
     let cleaned = String(text || '');
     for (const word of BANNED_WORDS) {
@@ -525,23 +778,65 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return cleaned;
   }
 
-  // ==========================================================
-  // 【分镜判断】判断当前拍是不是分镜/转场拍
-  // ----------------------------------------------------------
-  // 只在【拍标题】里判分镜。
-  // 之前扫的是 goal + beatTitle + why，误伤面太大——
-  // goal / why 是自然语言描述，用户/神谕顺口写「补足缺失的转场」
-  // 「同时推进两条线」这类句子时，会被误判成分镜拍，
-  // 导致整拍「我：」选项一条都不出。
-  // 现在：只有拍标题里明确带「分镜 / 转场 / 切到 / 视角切 / B线 / 支线 / 分镜拍」
-  // 才算分镜拍。标题是给这一拍起的名字，用它判更可靠。
-  // 如果某拍真是分镜但标题没写，那是大纲不规范——宁可漏判一次，
-  // 也不要大面积误判（误判的代价是这一拍完全没法推进）。
-  // ==========================================================
   function isCutSceneBeat(beatInfo) {
     if (!beatInfo) return false;
     const title = String(beatInfo.beatTitle || '');
     return CUT_SCENE_KEYWORDS.some(function (kw) { return title.indexOf(kw) >= 0; });
+  }
+
+  // ==========================================================
+  // 【世界书召回】—— 从酒馆世界书里取与正文相关的条目
+  // 简化关键词匹配 + 常驻条目无条件带上。只读，不改世界书。
+  // ==========================================================
+  function collectWorldInfoFor(narrativeText) {
+    try {
+      const ctx = getCtx();
+      if (!ctx) return '';
+
+      let books = null;
+      const es = ctx.extensionSettings || {};
+      if (es.world_info && es.world_info.entries) {
+        books = es.world_info.entries;
+      } else if (ctx.worldInfo && ctx.worldInfo.entries) {
+        books = ctx.worldInfo.entries;
+      } else if (es.world_info && typeof es.world_info === 'object') {
+        books = es.world_info;
+      } else if (ctx.worldInfo && typeof ctx.worldInfo === 'object') {
+        books = ctx.worldInfo;
+      }
+      if (!books) return '';
+
+      const text = String(narrativeText || '');
+      const hits = [];
+
+      const values = Array.isArray(books) ? books : Object.values(books);
+      for (const e of values) {
+        if (!e || typeof e !== 'object') continue;
+        if (e.disable === true || e.disabled === true) continue;
+
+        let keys = e.keys || e.key || e.keywords || '';
+        if (typeof keys === 'string') {
+          keys = keys.split(',').map(function (s) { return s.trim(); });
+        }
+        if (!Array.isArray(keys)) keys = [];
+        keys = keys.filter(Boolean);
+
+        const isConstant = e.constant === true || e.constant === 'true';
+        const hit = isConstant || keys.some(function (k) {
+          return k && text.indexOf(k) >= 0;
+        });
+        if (!hit) continue;
+
+        const content = String(e.content || e.value || '').trim();
+        if (content) hits.push(content);
+      }
+
+      if (!hits.length) return '';
+      return hits.slice(0, 4).join('\n\n');
+    } catch (err) {
+      console.warn('[next-beat] 世界书召回失败：', err);
+      return '';
+    }
   }
 
   function buildUserPrompt(narrativeText, beatInfo) {
@@ -553,13 +848,23 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
 
     const parts = [];
 
-    // ★★★ 导演锁注入（最前） ★★★
     const ctx = getCtx();
     const userName = ctx ? (ctx.name1 || 'User') : 'User';
     parts.push(DIRECTOR_LOCK.replace(/\{\{user\}\}/g, userName));
-    // ★★★★★★★★★★★★★★★★★★★★★★
 
-    // ★★★ 分镜拍判断与强制配比注入 ★★★
+    // user 人设（手填）
+    const persona = String(s.userPersonaText || '').trim();
+    if (persona) {
+      parts.push('【USER 人设（最高优先级，生成任何选项前必读）】');
+      parts.push('"""');
+      parts.push(persona);
+      parts.push('"""');
+      parts.push('⚠ 上面这段是本张卡里 user 的真实人设。所有以「我：」开头的候选，');
+      parts.push('  必须符合这个人设——身份、性格、说话方式、此刻的状态、信息边界都不能违背。');
+      parts.push('  不要写成另一个人，不要加"作者觉得帅"的行为。');
+      parts.push('');
+    }
+
     const isCutScene = isCutSceneBeat(beatInfo);
 
     if (beatInfo && beatInfo.goal) {
@@ -589,7 +894,31 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     parts.push('"""');
     parts.push('');
 
-    // ★★★ 接续自检（情境版 · 硬约束）—— 逼模型从上一拍末尾出发 ★★★
+    // 世界书召回：拼进选项生成 prompt
+    const wi = collectWorldInfoFor(trimmed);
+    if (wi) {
+      parts.push('【世界书命中条目（供参考，不要复述）】');
+      parts.push('"""');
+      parts.push(wi);
+      parts.push('"""');
+      parts.push('');
+      parts.push('⚠ 若上面的世界书条目里包含 user 或在场角色的人设 / 身份 / 说话方式 / 性格，');
+      parts.push('  生成选项时必须服从——不要写成与这个人设不符的另一个人。');
+      parts.push('');
+    }
+
+    parts.push('【人设推演 —— 生成候选前必做】');
+    parts.push('');
+    parts.push('写任何选项之前，先在脑内逐个过一遍本轮在场角色（含 user）：');
+    parts.push('  ① 他是谁（身份 / 性格 / 此刻情绪 / 他知道什么、不知道什么）；');
+    parts.push('  ② 以他的性格，此刻最可能做什么；');
+    parts.push('  ③ 以他的说话方式，此刻会怎么开口（用词风格）。');
+    parts.push('选项必须从这三格里长出来——不要写"一般人会有的反应"，要写"这个角色会有的反应"。');
+    parts.push('判断标准：熟人看到这条选项，会说"对，这就是他会干的事"→过关；');
+    parts.push('若换上任何别的角色标签也成立、看不出是谁 → 不合格，重写。');
+    parts.push('user 也按 user 的人设写；世界书命中条目里有该角色人设的，优先服从世界书。');
+    parts.push('');
+
     parts.push('【接续自检 —— 生成候选前，必须先在脑内做这一步】');
     parts.push('');
     parts.push('⚠ 核心认知：上面的【本拍目标】，描述的是"这一拍要走向的结果"，');
@@ -618,9 +947,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     parts.push('【再次强调】"补中间那一步"不是可选项，是硬性要求——');
     parts.push('只要你判定正文末尾与本拍目标【不在同一瞬间】，候选里就必须至少有一条是"过渡选项"。');
     parts.push('');
-    // ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
-    // ★★★ 氛围温度锁：正文后追加提醒（首尾夹击） ★★★
     parts.push('【⚠️ 氛围温度提醒（适用于所有场景，不针对特定剧情）】');
     parts.push('刚发生的这段正文无论是什么内容，你给的选项都不许冷冰冰。');
     parts.push('每条候选都要有“人味”——至少带一句台词、一个语气词、一个停顿、一个迟疑、');
@@ -628,7 +955,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     parts.push('禁止把有温度的场面写成事发现场笔录，禁止只用流程动作代替人物反应。');
     parts.push('人物的反应要和刚发生的事重量对等：刚经历强烈的事，不能立刻切成冷静的流程。');
     parts.push('');
-    // ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
     if (isCutScene) {
       parts.push('请严格生成 2~4 条「角色名：」和 1 条「时间：」，绝对不要生成任何「我：」条目。');
@@ -644,6 +970,7 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       parts.push('只有在确认玩家角色本人确实在场、能够当场反应时，才继续按下面的默认配比生成：');
       parts.push('请按系统提示规定的格式与配比，生成 4~7 条候选：3 条「我：」+ 1~3 条「角色名：」+ 0~1 条「时间：」。');
       parts.push('「角色名：」这一行必须用正文里对这个人物的称呼（例如「王奕：」「吕子乔：」），只有确实无法确定称呼时才退回「角色A：」。');
+      parts.push('⚠ 标签之后直接写动作 / 台词，不许再出现「我 / 他 / 她 / 它」；标签已经承担主语。');
       if (beatInfo && beatInfo.goal) {
         parts.push('所有候选的最终目标，都要能自然把剧情推向上面那个【本拍目标】；' +
           '其中至少一条应当是【紧接着上一句正文】的即时回应/行动，' +
@@ -675,7 +1002,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return parts.join('\n');
   }
 
-  // 破甲（破限 / 越狱）
   const ORACLE_JB_KEYS = [
     'jailbreakPrompt', 'jailbreakText', 'customJailbreak', 'jbText',
     'builtinJailbreakText', 'systemPromptJailbreak',
@@ -737,9 +1063,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return [{ role: 'system', content: text }, ...inner];
   }
 
-  // ---------------------------------------------------------------------------
-  // 解析候选
-  // ---------------------------------------------------------------------------
   function isJunkLine(line) {
     const t = String(line || '').trim();
     if (!t) return true;
@@ -766,29 +1089,36 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return false;
   }
 
-  // 从「标签：内容」里抠出标签；宽容处理 **加粗** / 空格 / 【xxx】方括号 / 全半角冒号。
-  // 返回标签字符串（已去掉包装）；认不出返回 ''。
   function extractLabel(line) {
     if (!line) return '';
     let s = String(line).trim();
-    // 剥掉 markdown 项目符号 / 编号（"- " / "* " / "A. " / "1) " 等），只针对行首
     s = s.replace(/^(?:[-*•·]|\d{1,2}[\.\)、）]|[A-Za-z][\.\)])\s+/, '');
-    // 剥掉 **加粗** 包裹
     s = s.replace(/^\*\*(.+?)\*\*/, '$1');
-    // 允许 【xxx】 / 〔xxx〕 这类括号包裹
     s = s.replace(/^[【〔\[](.+?)[】〕\]]/, '$1');
-    // 标签与冒号之间允许空格；冒号可以是全角或半角
     const m = s.match(/^([^：:]{1,16})\s*[：:]/);
     if (!m) return '';
     const label = m[1].trim();
     if (!label) return '';
-    if (/\s/.test(label)) return '';          // 标签内不能有空格
-    if (label.length > 12) return '';          // 过长视为普通正文
-    if (/[。！？，、；]/.test(label)) return ''; // 含句子标点视为正文
+    if (/\s/.test(label)) return '';
+    if (label.length > 12) return '';
+    if (/[。！？，、；]/.test(label)) return '';
     return label;
   }
 
-  // 优先解析「标签：内容」行（中英文冒号都吃，允许 **加粗** / 【xxx】/ 编号前缀）。
+  function stripLeadingPronoun(label, content) {
+    let c = String(content || '').trim();
+    if (label === LBL_USER) {
+      c = c.replace(/^我(?=[\u4e00-\u9fa5])/, '').trim();
+      c = c.replace(/^我(?=[，,。；;、\s])/, '').trim();
+      c = c.replace(/^我$/, '').trim();
+    }
+    if (label !== LBL_USER && label !== LBL_TIME) {
+      c = c.replace(/^[他她它](?=[\u4e00-\u9fa5])/, '').trim();
+      c = c.replace(/^[他她它](?=[，,。；;、\s])/, '').trim();
+    }
+    return c || content;
+  }
+
   function parseLabeledLines(src) {
     const out = [];
     for (const line of src.split(/\r?\n/)) {
@@ -798,12 +1128,11 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       const label = extractLabel(t);
       if (!label) continue;
       if (!isLegalLabel(label)) continue;
-      // 抠出冒号之后的内容
       const cm = t.match(/[：:]\s*(.+)$/);
       if (!cm) continue;
       const content = cm[1].trim();
       if (!content) continue;
-      out.push({ label, content, raw: t });
+      out.push({ label, content: stripLeadingPronoun(label, content), raw: t });
     }
     return out;
   }
@@ -811,11 +1140,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
   function parseOptions(text) {
     const src = String(text || '');
 
-    // ① 优先：「标签：内容」
     const labeled = parseLabeledLines(src);
     if (labeled.length) return dedupOptions(labeled);
 
-    // ② 兼容：**标签** 内容
     const out = [];
     const reLabeled = /^\s*\*\*([^*\n]+?)\*\*\s+(.+?)\s*$/;
     for (const line of src.split(/\r?\n/)) {
@@ -826,12 +1153,10 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       const content = m[2].trim();
       if (!label || !content) continue;
       if (!isLegalLabel(label)) continue;
-      out.push({ label, content, raw: line.trim() });
+      out.push({ label, content: stripLeadingPronoun(label, content), raw: line.trim() });
     }
     if (out.length) return dedupOptions(out);
 
-    // ③ 兜底：A. / 1. / - 这类纯编号行
-    //    ⚠ 修复点：如果内容本身是「角色名：xxx」，就把角色名提成标签，而不是一律标「选项」。
     const rePlain = /^\s*(?:([A-Za-z]|\d{1,2})[\.\)、）\s]|[-*•·])\s*(.+?)\s*$/;
     for (const line of src.split(/\r?\n/)) {
       if (isJunkLine(line)) continue;
@@ -845,9 +1170,9 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       if (innerLabel && isLegalLabel(innerLabel)) {
         const cm = content.match(/[：:]\s*(.+)$/);
         const innerContent = cm ? cm[1].trim() : content;
-        out.push({ label: innerLabel, content: innerContent, raw: t });
+        out.push({ label: innerLabel, content: stripLeadingPronoun(innerLabel, innerContent), raw: t });
       } else {
-        out.push({ label: '选项', content, raw: t });
+        continue;
       }
     }
 
@@ -879,7 +1204,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     }
     const ctl = new AbortController();
     currentAbort = ctl;
-    // 标记在途 + 更新悬浮球按钮态
     isGeneratingBeat = true;
     updateFloatStopBtn();
     const timer = setTimeout(() => { try { ctl.abort(); } catch (e) { /* ignore */ } }, REQUEST_TIMEOUT_MS);
@@ -902,13 +1226,11 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
         text = await sendWithOwnConnection(messages, maxTokens, s, ctl.signal);
       }
       text = String(text || '').trim();
-      // 导演锁清洗（防装逼）
       text = sanitizeDirectorLock(text);
       return parseOptions(text);
     } finally {
       clearTimeout(timer);
       if (currentAbort === ctl) currentAbort = null;
-      // 清在途标记 + 更新悬浮球按钮态
       isGeneratingBeat = false;
       updateFloatStopBtn();
     }
@@ -1031,35 +1353,16 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     el.value = String(text == null ? '' : text);
     el.dispatchEvent(new Event('input', { bubbles: true }));
     try { el.focus(); } catch (e) { /* ignore */ }
-    // 用户选了某条选项 → 提醒已完成使命，熄灭悬浮球的光
     clearFloatFresh();
     return true;
   }
 
-  // ==========================================================
-  // 【悬浮球发光提醒】熄灭入口
-  // ----------------------------------------------------------
-  // 触发时机：用户点了任意一条候选（经 fillInput 填进输入框）。
-  // 这是「已经注意到并使用了」的最直接信号 —— 光可以灭了。
-  // 幂等：悬浮球没建 / 没亮时调用无副作用。
-  // 注意：setFloatCollapsed 里还保留了一条「折叠时清光」的老路径，
-  // 两条路都能灭，互不冲突。
-  // ==========================================================
   function clearFloatFresh() {
     if (!floatEl) return;
     floatEl.classList.remove('so-nb-float-fresh');
     floatFresh = false;
   }
 
-  // ==========================================================
-  // 【终止生成】中止当前在途请求
-  // ----------------------------------------------------------
-  // 从悬浮球里的「⏹ 终止生成」按钮调用。
-  // 行为：abort 当前在途的 AbortController → requestNextBeatOptions 的
-  // fetch / api.run 会抛 AbortError → 上面 catch 里走 'abort' 分支静默
-  // 收尾（不弹错误）→ finally 清 isGeneratingBeat + 按钮态。
-  // 幂等：没在生成时调用无副作用（按钮此时本来就是 disabled）。
-  // ==========================================================
   function abortCurrentGeneration() {
     if (!isGeneratingBeat) return;
     try {
@@ -1067,8 +1370,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     } catch (e) { /* ignore */ }
   }
 
-  // 根据 isGeneratingBeat 亮 / 灰悬浮球里的「⏹ 终止生成」按钮。
-  // 悬浮球没建 / 卡片没展开时静默无操作。
   function updateFloatStopBtn() {
     if (!floatEl) return;
     const btn = floatEl.querySelector('#so-nb-float-stop');
@@ -1090,9 +1391,6 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     return 'so-nb-lbl-role';
   }
 
-  // 填入输入框时的前缀规则 ——
-  //   我 / 时间 → 不带前缀（原文即自然形式）；
-  //   其它标签（角色名 / 角色A / 选项）→ 带「标签：」前缀。
   function formatOptionForInput(opt) {
     const label = String((opt && opt.label) || '').trim();
     const content = String((opt && opt.content) || '').trim();
@@ -1529,6 +1827,12 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     renderSettingsModelSelect();
   }
   function closeSettings() {
+    // ★ 人设按存档分开存：关闭前把当前输入框内容归位到本存档，保证不丢。
+    try {
+      const st = loadSettings();
+      stashUserPersona(st);
+      saveSettings();
+    } catch (e) { /* ignore */ }
     if (settingsEl) settingsEl.classList.remove('so-nb-set-show');
   }
 
@@ -1604,6 +1908,20 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
             '<div id="so-nb-set-jb-custom" style="display:none;">' +
               '<textarea id="so-nb-set-jb-text" rows="8" placeholder="把你的破甲（破限 / 越狱）提示词粘贴到这里。只影响本插件，不污染故事神谕本体。">' + escapeText(s.jailbreakText) + '</textarea>' +
             '</div>' +
+          '</div>' +
+        '</details>' +
+
+        '<details class="so-nb-set-group" open>' +
+          '<summary>User 人设（每次生成选项都会带上）</summary>' +
+          '<div class="so-nb-set-group-body">' +
+            '<p class="so-nb-panel-label-hint" style="margin-left:0;">' +
+              '在这里填 <b>本张卡里 user 是谁</b>：身份 / 性格 / 说话方式 / 此刻情绪 / 已知与未知。' +
+              '每次生成选项时，这段会作为【最高优先级人设约束】拼进 prompt，' +
+              '让选项符合这张卡的 user，而不是通用玩家。<br>' +
+              '<b>人设按「存档」分开保存</b>：每张卡 / 每个存档都有自己的一份；' +
+              '切到别的卡 / 别的存档会换成那一份，<b>切回来时原来这份还在</b>。' +
+            '</p>' +
+            '<textarea id="so-nb-set-persona" rows="10" placeholder="例：\n姓名：李烨真\n身份：高中老师，教语文\n性格：表面温和，心里记仇；不爱主动，但被逼到墙角会立刻翻脸\n说话方式：短句，偶尔带一句古诗；不爆粗\n此刻：刚发现学生作弊，还没决定要不要拆穿\n已知：学生以为他不知道；不知道学生已经通知了家长\n不知道：家长今晚会来学校">' + escapeText(s.userPersonaText) + '</textarea>' +
           '</div>' +
         '</details>' +
 
@@ -1749,6 +2067,15 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
     bindInput('#so-nb-set-endpoint', 'connEndpoint');
     bindInput('#so-nb-set-apikey', 'connApiKey');
     bindInput('#so-nb-set-tpl', 'customOptionTemplate');
+
+    // ★ User 人设：改动时同时写进「当前身份」的映射条目（切档 / 换卡时按身份各读各的）。
+    const personaEl = settingsEl.querySelector('#so-nb-set-persona');
+    personaEl.addEventListener('input', function () {
+      const st = loadSettings();
+      st.userPersonaText = this.value;
+      stashUserPersona(st);        // ★ 写回本存档那份
+      saveSettings();
+    });
 
     settingsEl.querySelector('#so-nb-set-jb-mode').addEventListener('change', function () {
       const st = loadSettings();
@@ -2033,17 +2360,19 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
 
   function updatePanel() {
     if (!panelEl || !panelEl.isConnected) return;
+
     const entry = getLast();
     if (entry && Array.isArray(entry.options) && entry.options.length) {
       setPanelSuggestion(entry.options);
-      const b = entry.beatInfo;
-      if (b && b.goal) setPanelBeat('第 ' + b.progress + ' 拍' + (b.beatTitle ? ' · ' + b.beatTitle : '') + '\n目标：' + b.goal);
-      else setPanelBeat('（未在引导序列中）');
     } else {
       setPanelSuggestion(null);
-      const b = getActiveBeatInfo();
-      if (b && b.goal) setPanelBeat('第 ' + b.progress + ' 拍' + (b.beatTitle ? ' · ' + b.beatTitle : '') + '\n目标：' + b.goal);
-      else setPanelBeat('（未在引导序列中）');
+    }
+
+    const b = getActiveBeatInfo();
+    if (b && b.goal) {
+      setPanelBeat('第 ' + b.progress + ' 拍' + (b.beatTitle ? ' · ' + b.beatTitle : '') + '\n目标：' + b.goal);
+    } else {
+      setPanelBeat('（未在引导序列中）');
     }
   }
 
@@ -2121,13 +2450,12 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       jumpToLatestChip();
     });
 
-    // 终止生成按钮
     floatEl.querySelector('#so-nb-float-stop').addEventListener('click', function () {
       abortCurrentGeneration();
     });
 
     wireFloatDrag();
-    updateFloatStopBtn();   // 建卡后立刻同步一次按钮态
+    updateFloatStopBtn();
     return floatEl;
   }
 
@@ -2262,6 +2590,15 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       setTimeout(rehangChips, 100);
       updatePanel();
       applyFloatVisibility();
+      // ★ 人设按存档分开存：旧档那份在用户输入时就已写回（stashUserPersona），
+      //   这里只需按新身份把新档那份读回输入框——切回来时原样还在。
+      try {
+        const s = loadSettings();   // 内部 loadUserPersonaForChat 已把 userPersonaText 换成新档那份
+        syncPersonaInput();
+        void s;
+      } catch (e) {
+        console.warn('[next-beat] 换档读取 User 人设失败：', e);
+      }
     });
   }
 
@@ -2347,7 +2684,8 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
           '悬浮窗常驻（折叠成 🧭 圆标）' +
         '</label>' +
         '<p style="opacity:0.7; font-size:0.85em;">' +
-          '连接 / 模板 / 破甲 / 输出上限 / 提示词 / 上下文上限都在 🧭 面板里的 ⛭ 设置中。' +
+          '连接 / 模板 / 破甲 / 输出上限 / User 人设 / 提示词 / 上下文上限都在 🧭 面板里的 ⛭ 设置中。' +
+          '<br><b>User 人设按存档分开保存</b>：换卡 / 换存档会切到那一份，切回来还在。' +
         '</p>' +
       '</div>';
     container.appendChild(div);
@@ -2410,7 +2748,18 @@ user 可以**试探、可以反问、可以说反话**，但不能**当场替对
       watchWandMenu();
       refreshChips();
       applyFloatVisibility();
-      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 强化版）');
+      // ★ 首次载入：按当前身份把对应那份人设读回（覆盖"打开酒馆时已在某张卡"的场景）。
+      try {
+        const s = loadSettings();
+        syncPersonaInput();
+        void s;
+      } catch (e) { /* ignore */ }
+
+      lastBeatSig = currentBeatSignature();
+      if (beatPollTimer) clearInterval(beatPollTimer);
+      beatPollTimer = setInterval(checkBeatChanged, 1000);
+
+      console.log('[next-beat] 已加载（v' + VERSION + ' · 导演锁 + 分镜锁 + 氛围温度锁 + 连续性锁 + 世界书召回 + 人设推演 + 切拍感知 + 人设按存档分开存）');
     });
   });
 })();
